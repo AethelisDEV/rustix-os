@@ -2,9 +2,9 @@
 
 [![Rust](https://img.shields.io/badge/rust-stable%20%2F%20nightly-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Safety](https://img.shields.io/badge/safety-100%25%20Safe-success.svg)](#zero-unsafe-policy)
+[![Safety](https://img.shields.io/badge/safety-Safe%20Core%20%2F%20Bare--metal%20Unsafe-success.svg)](#safety--architecture-principles)
 
-**AE Rustanium** is a next-generation, microkernel-inspired operating system simulation written in **100% safe Rust**. It is designed to explore, demonstrate, and implement **hardware fault tolerance, silent data corruption mitigation, and self-healing memory architectures** entirely in software.
+**AE Rustanium** is a custom, microkernel-inspired operating system and simulation environment designed specifically to handle **hardware bit-flips, silent data corruption, and cosmic radiation**. It combines high-reliability **Safe Rust core abstractions** for host-side simulation with an **experimental bare-metal x86-64 target** that safely manages low-level hardware interactions.
 
 Built for environments susceptible to Single Event Upsets (SEUs) such as aerospace, deep space missions, high-altitude aviation, or edge nodes lacking hardware ECC RAM, AE Rustanium dynamically turns standard virtual pages into adaptive self-healing structures.
 
@@ -12,7 +12,7 @@ Built for environments susceptible to Single Event Upsets (SEUs) such as aerospa
 
 ## 🚀 Key Features
 
-*   **🛡️ 100% Safe Rust (`Zero Unsafe` Policy)**: Absolute ban on the `unsafe` keyword. Memory safety is guaranteed by Rust's compiler, while hardware safety is managed by software-defined virtualization.
+*   **🛡️ Safe Core / Bare-Metal Unsafe Boundaries**: The core flight simulation components (`memory-subsystem`, `scheduler`, `virtual-fs`, `kernel-core`) are built using 100% safe Rust to guarantee memory safety. Low-level bare-metal hardware components in the `kernel-x86` target leverage standard, strictly isolated `unsafe` blocks for GDT, interrupts, and direct hardware register access.
 *   **💾 Software-Defined ECC Pages**: Implements a robust SECDED (Single Error Correction, Double Error Detection) Hamming Code encoder and decoder. Data is encoded on write and verified on read.
 *   **🧹 Memory Scrubbing Daemon**: A background task sweeps physical memory page-by-page, correcting silent bit-flips (cosmic ray emulation) before they trigger application panics.
 *   **☣️ Dynamic Page Quarantine & Hot-Swap**: If a physical memory frame experiences a severe, uncorrectable double-bit flip, the microkernel quarantines that frame, dynamically allocates a healthy one, and relocates active task memory transparently.
@@ -46,7 +46,7 @@ When running the simulation, you are presented with a futuristic aerospace comma
 ```
 ==============================================================================
 ||              AE RUSTANIUM OS - MODULAR SELF-HEALING MICROKERNEL          ||
-||       [Zero Unsafe Policy] | [Active Fault Mitigation Flight Controller]  ||
+||  [Bit-Flip Fault Tolerance] | [Active Fault Mitigation Flight Controller]  ||
 ==============================================================================
 
   PHYSICAL RAM PAGE GRID (8x8)               SYSTEM TELEMETRY DIAGNOSTICS
