@@ -1,7 +1,7 @@
 # 🌟 AE Rustanium: Safe, Fault-Tolerant & Self-Healing Microkernel Simulation
 
 [![Rust](https://img.shields.io/badge/rust-stable%20%2F%20nightly-orange.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Safety](https://img.shields.io/badge/safety-100%25%20Safe-success.svg)](#zero-unsafe-policy)
 
 **AE Rustanium** is a next-generation, microkernel-inspired operating system simulation written in **100% safe Rust**. It is designed to explore, demonstrate, and implement **hardware fault tolerance, silent data corruption mitigation, and self-healing memory architectures** entirely in software.
@@ -141,4 +141,4 @@ The bootloader pipes the raw serial output into `qemu_serial.log` in the workspa
 
 ## 📜 License
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+This project is licensed under the Apache License, Version 2.0. See the [LICENSE](LICENSE) and [NOTICE](NOTICE) files for details.
