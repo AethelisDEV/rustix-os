@@ -1,0 +1,13 @@
+[package]
+name = "kernel-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+memory-subsystem = { path = "../memory-subsystem" }
+scheduler = { path = "../scheduler" }
+virtual-fs = { path = "../virtual-fs" }
+
+[features]
+default = ["std"]
+std = []

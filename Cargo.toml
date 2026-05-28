@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "memory-subsystem",
+    "scheduler",
+    "kernel-core",
+    "simulation-dashboard",
+    "virtual-fs",
+    "kernel-x86",
+]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

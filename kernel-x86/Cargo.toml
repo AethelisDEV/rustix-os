@@ -1,0 +1,21 @@
+[package]
+name = "kernel-x86"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Depend on kernel-core in strict no_std mode (no default std feature!)
+kernel-core = { path = "../kernel-core", default-features = false }
+bootloader = "0.9.23"
+x86_64 = "0.14.2"
+virtual-fs = { path = "../virtual-fs" }
+
+[[bin]]
+name = "kernel-x86"
+path = "src/main.rs"
+test = false
+bench = false
+
+[package.metadata.bootimage]
+# Launch QEMU headlessly, piping the serial COM1 port (0x3F8) to a log file in the workspace
+run-command = ["C:\\Program Files\\qemu\\qemu-system-x86_64.exe", "-drive", "format=raw,file={}", "-serial", "file:qemu_serial.log", "-display", "none"]

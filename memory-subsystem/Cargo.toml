@@ -1,0 +1,7 @@
+[package]
+name = "memory-subsystem"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Standard micro-crate, zero external dependencies for maximum portability and no_std compatibility.

@@ -1,0 +1,11 @@
+[package]
+name = "simulation-dashboard"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+memory-subsystem = { path = "../memory-subsystem" }
+scheduler = { path = "../scheduler" }
+kernel-core = { path = "../kernel-core" }
+virtual-fs = { path = "../virtual-fs" }
+# Zero external heavy dependencies to guarantee clean, instant compilation on Windows shells.
