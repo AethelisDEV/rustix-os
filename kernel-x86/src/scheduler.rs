@@ -26,8 +26,8 @@ struct TaskContext {
     r14: u64,
     r13: u64,
     r12: u64,
-    rbp: u64,
     rbx: u64,
+    rbp: u64,
     rip: u64, // Return address (instruction pointer)
 }
 
@@ -142,6 +142,7 @@ impl Scheduler {
         unsafe {
             let old_rsp_ptr = &mut self.threads[old_idx].rsp as *mut u64;
             let new_rsp = self.threads[next_idx].rsp;
+            SCHEDULER.force_unlock();
             switch_context(old_rsp_ptr, new_rsp);
         }
     }
@@ -157,10 +158,10 @@ pub static SCHEDULER: crate::Spinlock<Scheduler> = crate::Spinlock::new(Schedule
 /// # Safety
 /// This is highly unsafe because it directly manipulates the CPU stack pointer
 /// and caller-preserved registers, altering the flow of execution.
+#[unsafe(naked)]
 #[no_mangle]
-#[inline(never)]
 pub unsafe extern "C" fn switch_context(old_rsp: *mut u64, new_rsp: u64) {
-    core::arch::asm!(
+    core::arch::naked_asm!(
         // 1. Push callee-preserved registers onto old stack
         "push rbp",
         "push rbx",
@@ -180,9 +181,6 @@ pub unsafe extern "C" fn switch_context(old_rsp: *mut u64, new_rsp: u64) {
         "pop rbx",
         "pop rbp",
         // 5. Return to the instruction pointer stored on the new stack
-        "ret",
-        in("rdi") old_rsp,
-        in("rsi") new_rsp,
-        options(noreturn)
+        "ret"
     );
 }

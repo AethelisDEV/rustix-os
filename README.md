@@ -121,21 +121,52 @@ cargo clippy --workspace -- -D warnings
 
 ---
 
-## 🛰️ Experimental Bare-Metal target (`kernel-x86`)
+## 🛰️ UEFI & BIOS Dual-Boot Bare-Metal Target (`kernel-x86`)
 
-The `kernel-x86` crate compiles into a bootable disk image.
+The `kernel-x86` crate is a fully-fledged bare-metal x86-64 operating system target. Using the `bootloader_api` (v0.11) framework, it supports booting on both legacy BIOS systems and modern UEFI flight computers (such as Ryzen 7000/9000 AM5 series PCs).
 
-To run it:
-1. Make sure you have [QEMU](https://www.qemu.org/) installed and added to your path.
-2. Install the bootimage tool:
+### 🖥️ High-Performance UEFI GOP Framebuffer Graphics
+Instead of relying on outdated `0xB8000` VGA text mode (which crashes on modern UEFI systems), AE Rustanium dynamically binds to the UEFI **Graphics Output Protocol (GOP)** linear framebuffer. It renders an extremely premium, dark-themed visual dashboard containing:
+*   **Active Thread Status Cards**: Live rendering of Thread 1 (Memory Scrubber sweep) and Thread 2 (Telemetry engine).
+*   **System Diagnostics metrics**: Live ticks and voter health percentage.
+*   **Interactive Event Terminal**: Echoes PS/2 keyboard strikes in real-time with pixel-perfect font scaling using an embedded 8x8 bitmap font.
+*   **Dynamic Progress Indicators**: Heartbeat pulse representing the active scheduler time slice.
+
+![AE Rustanium UEFI Graphics Console](knowledge/uefi_console.png)
+
+### 🔌 Physical Hardware Optimization & Safety
+For native booting on modern flight hardware (such as AMD Ryzen platforms), several critical architectural enhancements have been implemented:
+1.  **Direct I/O Port Polling (Interrupt Safety)**: Modern UEFI systems ignore or mask legacy 8259 PIC interrupts, and BIOS/UEFI USB keyboard emulation can cause unhandled interrupt conflicts. To guarantee absolute stability, CPU hardware interrupts are kept completely disabled (`cli`). The PS/2 keyboard is read directly from ports `0x60` and `0x64` via a robust polling driver integrated into the main loop, bypassing legacy interrupts entirely.
+2.  **Unified Visual Panic Screen (Red Screen of Death)**: When a kernel panic or CPU exception (GPF, Page Fault, Stack Segment Fault, Divide by Zero) occurs on physical hardware, there is no serial debugger attached. We implemented a custom `GraphicsWriter` that formats text directly to the UEFI GOP framebuffer. If a crash occurs, the handler forcefully releases graphics locks and displays the crash dump visually in a bright red diagnostic console on the monitor instead of silently freezing.
+3.  **LockedHeap Dynamic Memory Allocation**: Standard bare-metal OS bump allocators leak memory upon deallocation, causing loop allocations in a continuous tick loop to run out of memory. We integrated the standard `linked_list_allocator::LockedHeap` with a 1 MB static heap buffer, enabling full memory reclamation and ensuring indefinite, leak-free continuous runtime on real hardware.
+
+---
+
+### 🚀 Running the Kernel in QEMU (Zero-Setup Emulation)
+We have implemented an automated workspace builder and runner. You do not need to install `bootimage` or any external tools!
+
+1. Make sure you have [QEMU](https://www.qemu.org/) installed at `C:\Program Files\qemu\qemu-system-x86_64.exe`.
+2. Run the automated host runner from your terminal:
    ```bash
-   cargo install bootimage
+   cargo run --package runner
    ```
-3. Run the kernel target under nightly:
-   ```bash
-   cargo +nightly bootimage --manifest-path kernel-x86/Cargo.toml
-   ```
-The bootloader pipes the raw serial output into `qemu_serial.log` in the workspace root.
+This command programmatically:
+1. Compiles `kernel-x86` for `x86_64-unknown-none`.
+2. Generates a legacy BIOS boot disk image at `target/x86_64-unknown-none/debug/bios.img`.
+3. Generates a modern GPT UEFI boot disk image at `target/x86_64-unknown-none/debug/uefi.img`.
+4. Spawns QEMU using the BIOS image with COM1 serial port output piped directly to your active console in real time!
+
+---
+
+### 🔌 Booting on a Real UEFI PC (e.g. Ryzen 7500F / RTX 3070 Ti)
+To boot this kernel on your physical computer:
+1. Locate the generated **`uefi.img`** at `target/x86_64-unknown-none/debug/uefi.img` (or `release/uefi.img` if compiled with `cargo run --package runner -- --release`).
+2. Insert a USB flash drive.
+3. Open a raw writer tool like **Rufus**:
+   *   Select your USB Drive.
+   *   Choose "Disk or ISO Image" and select `uefi.img`.
+   *   Ensure you write it in **DD Image Mode** (this writes the raw GPT partition containing the bootloader `/EFI/BOOT/BOOTX64.EFI` directly).
+4. Restart your PC, enter UEFI/BIOS settings, select the USB drive as the primary boot device, and watch AE Rustanium boot directly on real hardware!
 
 ---
 

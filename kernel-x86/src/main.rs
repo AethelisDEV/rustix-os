@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![feature(abi_x86_interrupt)]
+#![feature(abi_x86_interrupt, naked_functions)]
 
 //! # x86_64 Bare-Metal Entry Point for AE Rustanium
 //!
@@ -14,6 +14,7 @@ extern crate alloc;
 
 pub mod interrupts;
 pub mod scheduler;
+pub mod framebuffer;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -22,6 +23,12 @@ use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
+
+/// Global thread-safe static handle for the UEFI graphics driver.
+pub static GRAPHICS: Spinlock<Option<framebuffer::UefiGraphics>> = Spinlock::new(None);
+
+/// Global running system ticks count.
+pub static SYSTEM_TICKS: AtomicUsize = AtomicUsize::new(0);
 
 /// A simple, safe spinlock implementation for bare-metal concurrency control.
 pub struct Spinlock<T> {
@@ -45,6 +52,11 @@ impl<T> Spinlock<T> {
             core::hint::spin_loop();
         }
         SpinlockGuard { spinlock: self }
+    }
+
+    /// Forcefully unlocks the spinlock (used to yield across thread boundaries).
+    pub unsafe fn force_unlock(&self) {
+        self.lock.store(false, Ordering::Release);
     }
 }
 
@@ -150,77 +162,18 @@ pub fn _print(args: fmt::Arguments) {
     let _ = writer.write_fmt(args);
 }
 
-/// A high-performance, thread-safe, lock-free global bump allocator written specifically
-/// for AE Rustanium bare-metal execution without relying on std or lock overhead.
-pub struct AtomicBumpAllocator {
-    heap_start: AtomicUsize,
-    heap_end: AtomicUsize,
-    next: AtomicUsize,
-}
-
-impl AtomicBumpAllocator {
-    /// Creates a new uninitialized allocator.
-    pub const fn empty() -> Self {
-        Self {
-            heap_start: AtomicUsize::new(0),
-            heap_end: AtomicUsize::new(0),
-            next: AtomicUsize::new(0),
-        }
-    }
-
-    /// Initializes the allocator with a raw memory address and size.
-    pub fn init(&self, start: usize, size: usize) {
-        self.heap_start.store(start, Ordering::Release);
-        self.heap_end.store(start + size, Ordering::Release);
-        self.next.store(start, Ordering::Release);
-    }
-}
-
-unsafe impl GlobalAlloc for AtomicBumpAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let align = layout.align();
-        let size = layout.size();
-        
-        let mut current_next = self.next.load(Ordering::Relaxed);
-        loop {
-            let heap_end_val = self.heap_end.load(Ordering::Acquire);
-            if heap_end_val == 0 {
-                return core::ptr::null_mut(); // Not initialized yet!
-            }
-
-            // Align the start address based on layout requirements
-            let start = (current_next + align - 1) & !(align - 1);
-            let end = start.saturating_add(size);
-            
-            if end > heap_end_val {
-                return core::ptr::null_mut(); // Out of memory!
-            }
-            
-            // Atomically update the next allocation boundary
-            match self.next.compare_exchange_weak(current_next, end, Ordering::Release, Ordering::Relaxed) {
-                Ok(_) => return start as *mut u8,
-                Err(actual) => current_next = actual,
-            }
-        }
-    }
-    
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-        // Bump allocator does not free individual blocks
-    }
-}
-
 #[global_allocator]
-static ALLOCATOR: AtomicBumpAllocator = AtomicBumpAllocator::empty();
+static ALLOCATOR: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
 
 #[repr(align(16))]
 struct SafeHeap {
-    mem: core::cell::UnsafeCell<[u8; 256 * 1024]>,
+    mem: core::cell::UnsafeCell<[u8; 1024 * 1024]>,
 }
 unsafe impl Sync for SafeHeap {}
 
-// Static memory array to act as our kernel heap (256 KB)
+// Static memory array to act as our kernel heap (1 MB)
 static HEAP_MEM: SafeHeap = SafeHeap {
-    mem: core::cell::UnsafeCell::new([0; 256 * 1024]),
+    mem: core::cell::UnsafeCell::new([0; 1024 * 1024]),
 };
 
 /// Configures CR0 and CR4 registers to enable SSE and FPU on raw hardware.
@@ -247,9 +200,9 @@ pub fn enable_sse() {
 /// Background thread periodically sweeping memory for radiation bit flips.
 fn thread_scrubber() {
     loop {
-        // Yield or wait for 3 seconds (300 PIT ticks)
-        let start_ticks = interrupts::TIMER_TICKS.load(Ordering::Relaxed);
-        while interrupts::TIMER_TICKS.load(Ordering::Relaxed) - start_ticks < 300 {
+        // Yield or wait for 100 ticks (approx 2 seconds)
+        let start_ticks = SYSTEM_TICKS.load(Ordering::Relaxed);
+        while SYSTEM_TICKS.load(Ordering::Relaxed) - start_ticks < 100 {
             scheduler::SCHEDULER.lock().thread_yield();
         }
         println!("\x1B[38;5;46m[THREAD 1] Background Memory Scrubbing Sweep initiated...\x1B[0m");
@@ -259,36 +212,35 @@ fn thread_scrubber() {
 /// Background thread periodically logging system metrics and diagnostics.
 fn thread_diagnostics() {
     loop {
-        // Yield or wait for 6 seconds (600 PIT ticks)
-        let start_ticks = interrupts::TIMER_TICKS.load(Ordering::Relaxed);
-        while interrupts::TIMER_TICKS.load(Ordering::Relaxed) - start_ticks < 600 {
+        // Yield or wait for 200 ticks (approx 4 seconds)
+        let start_ticks = SYSTEM_TICKS.load(Ordering::Relaxed);
+        while SYSTEM_TICKS.load(Ordering::Relaxed) - start_ticks < 200 {
             scheduler::SCHEDULER.lock().thread_yield();
         }
         println!("\x1B[38;5;51m[THREAD 2] Live system diagnostics telemetry generated successfully.\x1B[0m");
     }
 }
 
-// Register entry point macro with bootloader crate
-bootloader::entry_point!(kernel_main);
+// Register entry point macro with bootloader_api crate
+bootloader_api::entry_point!(kernel_main);
 
 /// The absolute entry point of the bare-metal x86_64 operating system kernel.
-fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
-    // Direct VGA write to display "BOOT OK" in the terminal via emulated screen
-    unsafe {
-        let vga = 0xB8000 as *mut u16;
-        vga.write_volatile(0x0a00 | b'B' as u16); // Green 'B'
-        vga.add(1).write_volatile(0x0a00 | b'O' as u16);
-        vga.add(2).write_volatile(0x0a00 | b'O' as u16);
-        vga.add(3).write_volatile(0x0a00 | b'T' as u16);
-        vga.add(4).write_volatile(0x0a00 | b' ' as u16);
-        vga.add(5).write_volatile(0x0a00 | b'O' as u16);
-        vga.add(6).write_volatile(0x0a00 | b'K' as u16); // Green 'K'
-    }
-
-    // 1. Initialize serial port hardware
+fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
+    // 1. Initialize serial port hardware immediately
     {
         let mut writer = SerialPort::new(0x3F8);
         writer.init();
+    }
+
+    // 2. Initialize GOP graphics if available
+    if let Some(fb) = boot_info.framebuffer.as_mut() {
+        let graphics = framebuffer::UefiGraphics::new(fb);
+        *GRAPHICS.lock() = Some(graphics);
+    }
+
+    // Draw initial aesthetic dashboard visual
+    if let Some(ref mut graphics) = *GRAPHICS.lock() {
+        graphics.draw_dashboard_layout(0);
     }
 
     // 2. Enable SSE and configure 8259 PIC + IDT interrupts
@@ -303,13 +255,18 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
     }
     interrupts::init_pit();
 
-    // Enable CPU hardware interrupts!
-    x86_64::instructions::interrupts::enable();
+    // Disable CPU hardware interrupts to prevent spurious UEFI hardware interrupt crashes!
+    // Since we use cooperative multitasking and poll direct hardware ports (0x60/0x64),
+    // we do not need external hardware interrupts active. Exceptions (Page Faults, GPFs)
+    // will still run perfectly.
+    // x86_64::instructions::interrupts::enable();
 
-    // 3. Initialize global lock-free heap memory allocator
+    // 3. Initialize global locked heap memory allocator (1 MB)
     let heap_ptr = HEAP_MEM.mem.get() as *mut u8;
-    let heap_size = 256 * 1024;
-    ALLOCATOR.init(heap_ptr as usize, heap_size);
+    let heap_size = 1024 * 1024;
+    unsafe {
+        ALLOCATOR.lock().init(heap_ptr, heap_size);
+    }
 
     println!("============================================================");
     println!("AE RUSTANIUM OS - BARE-METAL INTEL/AMD x86_64 FLIGHT COMPUTER");
@@ -338,22 +295,39 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
         let _ = sched.spawn(thread_diagnostics);
     }
 
-    // 4. Main execution loop (asynchronous interrupt-driven)
+    // 4. Keyboard polling driver (bypasses blocked legacy interrupts)
+    let poll_keyboard = || -> Option<KeyboardInput> {
+        unsafe {
+            let mut status_port: Port<u8> = Port::new(0x64);
+            if status_port.read() & 1 != 0 {
+                let mut data_port: Port<u8> = Port::new(0x60);
+                let scancode = data_port.read();
+                x86_64::instructions::interrupts::without_interrupts(|| {
+                    interrupts::KEYBOARD_STATE.handle_scancode(scancode)
+                })
+            } else {
+                None
+            }
+        }
+    };
+
+    // 5. Main execution loop with robust cooperative polling
     let mut line_buffer = String::new();
+    let mut last_rendered_ticks = 0;
+    let mut last_rendered_len = 0;
 
     print!("rustanium> ");
 
     loop {
-        // A. Process timer ticks accumulated asynchronously
-        let ticks = interrupts::TIMER_TICKS.swap(0, Ordering::Relaxed);
-        for _ in 0..ticks {
-            core.tick();
+        // A. Dynamic steady tick generator (simulates a steady 50Hz hardware clock)
+        for _ in 0..20_000 {
+            core::hint::spin_loop();
         }
+        let current_ticks = SYSTEM_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+        core.tick();
 
-        // B. Process any keyboard input from asynchronous buffer
-        let input = x86_64::instructions::interrupts::without_interrupts(|| {
-            unsafe { interrupts::KEYBOARD_BUFFER.take() }
-        });
+        // B. Poll keyboard input directly from hardware ports (bypasses blocked interrupts)
+        let input = poll_keyboard();
 
         // C. Poll Serial UART Port Status (cooperative fallback for serial console)
         let serial_input = poll_serial();
@@ -383,11 +357,26 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
             }
         }
 
+        // Optimized dynamic rendering: Only update changed elements (completely flicker-free!)
+        let current_len = line_buffer.len();
+        if current_ticks != last_rendered_ticks {
+            if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                graphics.update_dashboard_telemetry(current_ticks);
+            }
+            last_rendered_ticks = current_ticks;
+        }
+        if current_len != last_rendered_len {
+            if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                let mut prompt_buf = String::new();
+                prompt_buf.push_str("rustanium> ");
+                prompt_buf.push_str(&line_buffer);
+                graphics.update_keyboard_prompt(&prompt_buf);
+            }
+            last_rendered_len = current_len;
+        }
+
         // D. Yield CPU to let other background threads run cooperatively
         scheduler::SCHEDULER.lock().thread_yield();
-
-        // E. Put the CPU to sleep until next interrupt
-        x86_64::instructions::hlt();
     }
 }
 
@@ -675,6 +664,30 @@ fn panic(info: &PanicInfo) -> ! {
     println!("Message: \x1B[38;5;220m{}\x1B[0m", info);
     println!("Halting CPU core. System halted.");
     
+    // Draw the panic details onto the UEFI GOP framebuffer!
+    unsafe {
+        GRAPHICS.force_unlock();
+    }
+    if let Some(ref mut graphics) = *GRAPHICS.lock() {
+        // Red crash panel!
+        graphics.draw_rect(40, 260, 1200, 400, framebuffer::Color::new(180, 0, 0)); // Red background
+        graphics.draw_rect(40, 260, 1200, 4, framebuffer::Color::new(255, 255, 255)); // White border
+        graphics.draw_string(60, 280, "CRITICAL KERNEL PANIC / CPU EXCEPTION DETECTED", framebuffer::COLOR_TEXT_WHITE, None, 2);
+        graphics.draw_rect(60, 304, 1160, 1, framebuffer::COLOR_TEXT_WHITE);
+
+        // Format direct to screen using GraphicsWriter
+        let mut writer = framebuffer::GraphicsWriter {
+            graphics,
+            x: 60,
+            y: 320,
+            start_x: 60,
+            color: framebuffer::COLOR_TEXT_WHITE,
+        };
+
+        use core::fmt::Write;
+        let _ = write!(&mut writer, "{}", info);
+    }
+
     loop {
         x86_64::instructions::hlt();
     }

@@ -140,6 +140,10 @@ pub fn init_idt() {
         IDT.breakpoint.set_handler_fn(breakpoint_handler);
         IDT.double_fault.set_handler_fn(double_fault_handler);
         IDT.page_fault.set_handler_fn(page_fault_handler);
+        IDT.general_protection_fault.set_handler_fn(general_protection_fault_handler);
+        IDT.invalid_opcode.set_handler_fn(invalid_opcode_handler);
+        IDT.stack_segment_fault.set_handler_fn(stack_segment_fault_handler);
+        IDT.divide_error.set_handler_fn(divide_by_zero_handler);
 
         // Hardware Interrupt Handlers mapped to PIC offsets
         IDT[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
@@ -155,17 +159,45 @@ extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) -> ! {
-    panic!("[CPU CATASTROPHIC] Double Fault Exception (error code: {}):\n{:#?}", error_code, stack_frame);
+    panic!("[CPU CATASTROPHIC] Double Fault Exception (error code: {:#X}):\n{:#?}", error_code, stack_frame);
 }
 
 extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode) {
     use x86_64::registers::control::Cr2;
-    println!("\x1B[38;5;196m[CPU EXCEPTION] Page Fault accessing address: {:#X}\x1B[0m", Cr2::read().as_u64());
-    println!("Error Code: {:?}", error_code);
-    println!("{:#?}", stack_frame);
-    loop {
-        x86_64::instructions::hlt();
-    }
+    panic!(
+        "[CPU EXCEPTION] Page Fault accessing address: {:#X}\nError Code: {:?}\n{:#?}",
+        Cr2::read().as_u64(),
+        error_code,
+        stack_frame
+    );
+}
+
+extern "x86-interrupt" fn general_protection_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    panic!(
+        "[CPU EXCEPTION] General Protection Fault (error code: {:#X}):\n{:#?}",
+        error_code, stack_frame
+    );
+}
+
+extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
+    panic!(
+        "[CPU EXCEPTION] Invalid Opcode:\n{:#?}",
+        stack_frame
+    );
+}
+
+extern "x86-interrupt" fn stack_segment_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    panic!(
+        "[CPU EXCEPTION] Stack Segment Fault (error code: {:#X}):\n{:#?}",
+        error_code, stack_frame
+    );
+}
+
+extern "x86-interrupt" fn divide_by_zero_handler(stack_frame: InterruptStackFrame) {
+    panic!(
+        "[CPU EXCEPTION] Divide by Zero:\n{:#?}",
+        stack_frame
+    );
 }
 
 /// Global ticks accumulator populated asynchronously by PIT timer interrupts.
