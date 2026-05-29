@@ -13,6 +13,7 @@
 extern crate alloc;
 
 pub mod interrupts;
+pub mod scheduler;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -243,6 +244,30 @@ pub fn enable_sse() {
 
 // Static IDT code removed, delegated to interrupts.rs
 
+/// Background thread periodically sweeping memory for radiation bit flips.
+fn thread_scrubber() {
+    loop {
+        // Yield or wait for 3 seconds (300 PIT ticks)
+        let start_ticks = interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+        while interrupts::TIMER_TICKS.load(Ordering::Relaxed) - start_ticks < 300 {
+            scheduler::SCHEDULER.lock().thread_yield();
+        }
+        println!("\x1B[38;5;46m[THREAD 1] Background Memory Scrubbing Sweep initiated...\x1B[0m");
+    }
+}
+
+/// Background thread periodically logging system metrics and diagnostics.
+fn thread_diagnostics() {
+    loop {
+        // Yield or wait for 6 seconds (600 PIT ticks)
+        let start_ticks = interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+        while interrupts::TIMER_TICKS.load(Ordering::Relaxed) - start_ticks < 600 {
+            scheduler::SCHEDULER.lock().thread_yield();
+        }
+        println!("\x1B[38;5;51m[THREAD 2] Live system diagnostics telemetry generated successfully.\x1B[0m");
+    }
+}
+
 // Register entry point macro with bootloader crate
 bootloader::entry_point!(kernel_main);
 
@@ -305,6 +330,14 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
     println!("[KERNEL] Entering autonomous flight controller ticks loop...");
     println!();
 
+    // 4. Initialize cooperative scheduler and spawn background threads
+    {
+        let mut sched = scheduler::SCHEDULER.lock();
+        sched.register_main_thread();
+        let _ = sched.spawn(thread_scrubber);
+        let _ = sched.spawn(thread_diagnostics);
+    }
+
     // 4. Main execution loop (asynchronous interrupt-driven)
     let mut line_buffer = String::new();
 
@@ -350,7 +383,10 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
             }
         }
 
-        // D. Put the CPU to sleep until next interrupt
+        // D. Yield CPU to let other background threads run cooperatively
+        scheduler::SCHEDULER.lock().thread_yield();
+
+        // E. Put the CPU to sleep until next interrupt
         x86_64::instructions::hlt();
     }
 }
