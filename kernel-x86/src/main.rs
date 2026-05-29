@@ -46,6 +46,10 @@ pub fn append_log(msg: &str) {
         if cleaned.trim().is_empty() {
             continue;
         }
+        // Filter out periodic background thread sweep logs to keep the visual screen clean!
+        if cleaned.contains("[THREAD 1]") || cleaned.contains("[THREAD 2]") {
+            continue;
+        }
         logs.push(cleaned);
     }
     // Limit to the last 8 lines (fits in our visual log box)
