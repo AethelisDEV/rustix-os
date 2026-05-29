@@ -12,6 +12,8 @@
 
 extern crate alloc;
 
+pub mod interrupts;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
@@ -19,7 +21,6 @@ use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
 /// A simple, safe spinlock implementation for bare-metal concurrency control.
 pub struct Spinlock<T> {
@@ -240,37 +241,7 @@ pub fn enable_sse() {
     }
 }
 
-// Static Interrupt Descriptor Table (IDT)
-static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
-
-/// Initializes and loads the Interrupt Descriptor Table (IDT)
-pub fn init_idt() {
-    unsafe {
-        IDT.breakpoint.set_handler_fn(breakpoint_handler);
-        IDT.double_fault.set_handler_fn(double_fault_handler);
-        IDT.page_fault.set_handler_fn(page_fault_handler);
-        IDT.load();
-    }
-}
-
-extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
-    println!("\x1B[38;5;220m[CPU EXCEPTION] Breakpoint Interrupt:\x1B[0m");
-    println!("{:#?}", stack_frame);
-}
-
-extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) -> ! {
-    panic!("[CPU CATASTROPHIC] Double Fault Exception (error code: {}):\n{:#?}", error_code, stack_frame);
-}
-
-extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode) {
-    use x86_64::registers::control::Cr2;
-    println!("\x1B[38;5;196m[CPU EXCEPTION] Page Fault accessing address: {:#X}\x1B[0m", Cr2::read().as_u64());
-    println!("Error Code: {:?}", error_code);
-    println!("{:#?}", stack_frame);
-    loop {
-        x86_64::instructions::hlt();
-    }
-}
+// Static IDT code removed, delegated to interrupts.rs
 
 // Register entry point macro with bootloader crate
 bootloader::entry_point!(kernel_main);
@@ -295,9 +266,20 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
         writer.init();
     }
 
-    // 2. Enable SSE and initialize IDT
+    // 2. Enable SSE and configure 8259 PIC + IDT interrupts
     enable_sse();
-    init_idt();
+    
+    // Initialize IDT and setup hardware interrupts
+    interrupts::init_idt();
+    unsafe {
+        interrupts::PICS.initialize();
+        interrupts::PICS.enable_irq(0); // Timer IRQ 0
+        interrupts::PICS.enable_irq(1); // Keyboard IRQ 1
+    }
+    interrupts::init_pit();
+
+    // Enable CPU hardware interrupts!
+    x86_64::instructions::interrupts::enable();
 
     // 3. Initialize global lock-free heap memory allocator
     let heap_ptr = HEAP_MEM.mem.get() as *mut u8;
@@ -323,32 +305,28 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
     println!("[KERNEL] Entering autonomous flight controller ticks loop...");
     println!();
 
-    // 4. Main execution loop
-    let mut keyboard_state = KeyboardState::new();
+    // 4. Main execution loop (asynchronous interrupt-driven)
     let mut line_buffer = String::new();
 
     print!("rustanium> ");
 
     loop {
-        core.tick();
-
-        // A. Poll PS/2 Keyboard Status
-        let mut ps2_input = None;
-        unsafe {
-            let mut status_port: Port<u8> = Port::new(0x64);
-            if status_port.read() & 1 != 0 {
-                let mut data_port: Port<u8> = Port::new(0x60);
-                let scancode = data_port.read();
-                ps2_input = keyboard_state.handle_scancode(scancode);
-            }
+        // A. Process timer ticks accumulated asynchronously
+        let ticks = interrupts::TIMER_TICKS.swap(0, Ordering::Relaxed);
+        for _ in 0..ticks {
+            core.tick();
         }
 
-        // B. Poll Serial UART Port Status
+        // B. Process any keyboard input from asynchronous buffer
+        let input = x86_64::instructions::interrupts::without_interrupts(|| {
+            unsafe { interrupts::KEYBOARD_BUFFER.take() }
+        });
+
+        // C. Poll Serial UART Port Status (cooperative fallback for serial console)
         let serial_input = poll_serial();
 
-        // C. Process any incoming character from either interface
-        if let Some(input) = ps2_input.or(serial_input) {
-            match input {
+        if let Some(in_val) = input.or(serial_input) {
+            match in_val {
                 KeyboardInput::Char(c) => {
                     line_buffer.push(c);
                     print!("{}", c);
@@ -371,6 +349,9 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
                 }
             }
         }
+
+        // D. Put the CPU to sleep until next interrupt
+        x86_64::instructions::hlt();
     }
 }
 
