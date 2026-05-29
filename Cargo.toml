@@ -8,6 +8,13 @@ members = [
     "virtual-fs",
     "kernel-x86",
 ]
+default-members = [
+    "memory-subsystem",
+    "scheduler",
+    "kernel-core",
+    "simulation-dashboard",
+    "virtual-fs",
+]
 
 [profile.dev]
 panic = "abort"
