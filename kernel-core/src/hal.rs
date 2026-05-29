@@ -99,9 +99,10 @@ impl Cpu {
         }
         #[cfg(not(feature = "std"))]
         {
-            unsafe {
-                core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
-            }
+            // Since interrupts are disabled on the bare-metal x86-64 target,
+            // executing 'hlt' would halt the CPU permanently.
+            // We use spin_loop (which compiles to a 'pause' instruction) to yield and allow polling to continue.
+            core::hint::spin_loop();
         }
     }
 }
