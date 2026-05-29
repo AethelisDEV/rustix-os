@@ -297,7 +297,7 @@ impl UefiGraphics {
     }
 
     /// Renders a modern, space-grade dashboard visual console onto the active monitor.
-    pub fn draw_dashboard_layout(&mut self, ticks: usize) {
+    pub fn draw_dashboard_layout(&mut self, ticks: usize, logs: &[alloc::string::String]) {
         // 1. Sleek Charcoal Background
         self.clear(COLOR_BG);
 
@@ -345,14 +345,25 @@ impl UefiGraphics {
         self.draw_string(60, 280, "REAL-TIME MICROKERNEL EVENTS STREAM (COM1 SERIAL REPLICATED)", COLOR_TEXT_WHITE, None, 1);
         self.draw_rect(60, 304, 1160, 1, COLOR_TEXT_MUTED); // Horizontal divider
 
-        // Draw rolling logs placeholder
-        self.draw_string(60, 324, ">>> [SYSTEM] UEFI bootloader initialized GOP graphics mode successfully.", COLOR_TEXT_MUTED, None, 1);
-        self.draw_string(60, 344, ">>> [SYSTEM] SSE and FPU registers enabled (CR0/CR4 activated).", COLOR_TEXT_MUTED, None, 1);
-        self.draw_string(60, 364, ">>> [SYSTEM] IDT configured. Programmable Interval Timer (100 Hz) active.", COLOR_TEXT_MUTED, None, 1);
-        self.draw_string(60, 384, ">>> [SYSTEM] PS/2 keyboard asynchronous interrupt-driven buffer enabled.", COLOR_TEXT_MUTED, None, 1);
-        self.draw_string(60, 404, ">>> [SYSTEM] Cooperative multitasking active (Round-Robin context switcher).", COLOR_TEXT_MUTED, None, 1);
-        self.draw_string(60, 424, ">>> [SPAWN]  Background Memory Scrubber sweep active on CPU core.", COLOR_ACCENT_BLUE, None, 1);
-        self.draw_string(60, 444, ">>> [SPAWN]  Flight Telemetry engine registered on physical page frame 1.", COLOR_ACCENT_PURPLE, None, 1);
+        // Draw rolling logs from the buffer
+        for (idx, line) in logs.iter().enumerate() {
+            if idx >= 8 {
+                break;
+            }
+            let y = 324 + idx * 20;
+            let color = if line.starts_with(">>>") || line.starts_with("[SYSTEM]") || line.starts_with("[BOOT]") || line.starts_with("[KERNEL]") {
+                COLOR_TEXT_MUTED
+            } else if line.contains("[THREAD") {
+                COLOR_ACCENT_BLUE
+            } else if line.contains("[QUARANTINE") || line.contains("[VFS ERR]") || line.contains("Unknown command") {
+                Color::new(255, 60, 60)
+            } else if line.contains("[HEALING") {
+                COLOR_ACCENT_GREEN
+            } else {
+                COLOR_TEXT_WHITE
+            };
+            self.draw_string(60, y, line, color, None, 1);
+        }
         
         self.draw_string(60, 484, ">>> INTERACTIVE PS/2 KEYBOARD ECHO (Strike keys to print on real hardware):", COLOR_TEXT_WHITE, None, 1);
         
@@ -387,6 +398,32 @@ impl UefiGraphics {
         
         // Draw the updated prompt text
         self.draw_string(60, 514, text, COLOR_ACCENT_GREEN, None, 1);
+    }
+
+    /// Dynamically redraws the rolling logs in the logs panel.
+    pub fn update_dashboard_logs(&mut self, logs: &[alloc::string::String]) {
+        // Clear the logs drawing area using Panel Background Color (x: 60, y: 324, w: 1160, h: 156)
+        self.draw_rect(60, 324, 1160, 156, COLOR_PANEL_BG);
+
+        // Draw up to 8 lines of logs
+        for (idx, line) in logs.iter().enumerate() {
+            if idx >= 8 {
+                break;
+            }
+            let y = 324 + idx * 20;
+            let color = if line.starts_with(">>>") || line.starts_with("[SYSTEM]") || line.starts_with("[BOOT]") || line.starts_with("[KERNEL]") {
+                COLOR_TEXT_MUTED
+            } else if line.contains("[THREAD") {
+                COLOR_ACCENT_BLUE
+            } else if line.contains("[QUARANTINE") || line.contains("[VFS ERR]") || line.contains("Unknown command") {
+                Color::new(255, 60, 60)
+            } else if line.contains("[HEALING") {
+                COLOR_ACCENT_GREEN
+            } else {
+                COLOR_TEXT_WHITE
+            };
+            self.draw_string(60, y, line, color, None, 1);
+        }
     }
 }
 

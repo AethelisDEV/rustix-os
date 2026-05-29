@@ -30,6 +30,30 @@ pub static GRAPHICS: Spinlock<Option<framebuffer::UefiGraphics>> = Spinlock::new
 /// Global running system ticks count.
 pub static SYSTEM_TICKS: AtomicUsize = AtomicUsize::new(0);
 
+/// Global atomic flags to prevent boot-stage allocator panics
+pub static ALLOCATOR_READY: AtomicBool = AtomicBool::new(false);
+pub static LOGS_CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// Global rolling log buffer holding the last 8 printed messages
+pub static SYSTEM_LOGS: Spinlock<alloc::vec::Vec<alloc::string::String>> = Spinlock::new(alloc::vec::Vec::new());
+
+/// Appends a new message line to the global rolling log buffer.
+pub fn append_log(msg: &str) {
+    let mut logs = SYSTEM_LOGS.lock();
+    for line in msg.lines() {
+        let cleaned = line.replace("\r", "");
+        // Ignore empty lines
+        if cleaned.trim().is_empty() {
+            continue;
+        }
+        logs.push(cleaned);
+    }
+    // Limit to the last 8 lines (fits in our visual log box)
+    while logs.len() > 8 {
+        logs.remove(0);
+    }
+}
+
 /// A simple, safe spinlock implementation for bare-metal concurrency control.
 pub struct Spinlock<T> {
     lock: AtomicBool,
@@ -160,6 +184,13 @@ macro_rules! println {
 pub fn _print(args: fmt::Arguments) {
     let mut writer = SerialPort::new(0x3F8);
     let _ = writer.write_fmt(args);
+
+    if ALLOCATOR_READY.load(Ordering::Acquire) {
+        let mut msg = alloc::string::String::new();
+        let _ = core::fmt::write(&mut msg, args);
+        append_log(&msg);
+        LOGS_CHANGED.store(true, Ordering::Release);
+    }
 }
 
 #[global_allocator]
@@ -240,7 +271,7 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
 
     // Draw initial aesthetic dashboard visual
     if let Some(ref mut graphics) = *GRAPHICS.lock() {
-        graphics.draw_dashboard_layout(0);
+        graphics.draw_dashboard_layout(0, &[]);
     }
 
     // 2. Enable SSE and configure 8259 PIC + IDT interrupts
@@ -267,6 +298,15 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     unsafe {
         ALLOCATOR.lock().init(heap_ptr, heap_size);
     }
+    ALLOCATOR_READY.store(true, Ordering::Release);
+
+    // Seed the visual console with initial boot status events
+    println!(">>> [SYSTEM] UEFI bootloader initialized GOP graphics mode successfully.");
+    println!(">>> [SYSTEM] SSE and FPU registers enabled (CR0/CR4 activated).");
+    println!(">>> [SYSTEM] IDT configured. CPU exceptions fully mapped.");
+    println!(">>> [SYSTEM] PS/2 keyboard direct I/O polling driver activated.");
+    println!(">>> [SYSTEM] Cooperative multitasking active (Round-Robin context switcher).");
+    println!("[SYSTEM] Heap Allocator online (1 MB LockedHeap active).");
 
     println!("============================================================");
     println!("AE RUSTANIUM OS - BARE-METAL INTEL/AMD x86_64 FLIGHT COMPUTER");
@@ -373,6 +413,12 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
                 graphics.update_keyboard_prompt(&prompt_buf);
             }
             last_rendered_len = current_len;
+        }
+        if LOGS_CHANGED.swap(false, Ordering::Acquire) {
+            if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                let logs = SYSTEM_LOGS.lock().clone();
+                graphics.update_dashboard_logs(&logs);
+            }
         }
 
         // D. Yield CPU to let other background threads run cooperatively
