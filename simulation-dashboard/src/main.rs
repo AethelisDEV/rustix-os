@@ -97,6 +97,52 @@ fn render_dashboard(core: &SystemCore) {
     // Grid Legend
     println!("  \x1B[1mLegend:\x1B[0m \x1B[38;5;46m[ ] Healthy\x1B[0m | \x1B[38;5;220m[ ] ECC Corrected\x1B[0m | \x1B[38;5;196m[X] Quarantined\x1B[0m | T/N/L: Running Tasks");
 
+    // TRIPLE MODULAR REDUNDANCY (TMR) VOTER DIAGNOSTICS
+    println!();
+    println!("  \x1B[1mTRIPLE MODULAR REDUNDANCY (TMR) VOTER DIAGNOSTICS\x1B[0m");
+    println!("  ----------------------------------------------------------------------------");
+    let stability = if core.critical_tmr_ops > 0 {
+        let correction_rate = core.tmr_voter_corrections as f64 / core.critical_tmr_ops as f64;
+        (1.0 - correction_rate) * 100.0
+    } else {
+        100.0
+    };
+
+    let stability_color = if stability > 98.0 {
+        "\x1B[38;5;46m" // Green
+    } else if stability > 90.0 {
+        "\x1B[38;5;220m" // Yellow
+    } else {
+        "\x1B[38;5;196m" // Red
+    };
+
+    let total_bars: usize = 40;
+    let green_bars = (total_bars as f64 * (stability / 100.0)).round() as usize;
+    let red_bars = total_bars.saturating_sub(green_bars);
+
+    print!("  Voter Stability Index : [");
+    print!("{}", stability_color);
+    for _ in 0..green_bars {
+        print!("█");
+    }
+    print!("\x1B[38;5;243m");
+    for _ in 0..red_bars {
+        print!("█");
+    }
+    print!("\x1B[0m] ");
+    println!("{}{:.2}%\x1B[0m Health", stability_color, stability);
+
+    let fault_rate = if core.critical_tmr_ops > 0 {
+        (core.tmr_voter_corrections as f64 / core.critical_tmr_ops as f64) * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "  Critical TMR Cycles   : {:4} | ALU Voter Interceptions : {:2} (Fault Rate: \x1B[38;5;220m{:.2}%\x1B[0m)",
+        core.critical_tmr_ops, core.tmr_voter_corrections, fault_rate
+    );
+
+
     // Real-Time Event Logs Bus Frame
     println!();
     println!("  \x1B[1mREAL-TIME KERNEL EVENTS BUS (Rolling Logs)\x1B[0m");

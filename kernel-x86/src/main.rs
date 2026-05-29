@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
 //! # x86_64 Bare-Metal Entry Point for AE Rustanium
 //!
@@ -18,6 +19,7 @@ use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
 /// A simple, safe spinlock implementation for bare-metal concurrency control.
 pub struct Spinlock<T> {
@@ -219,6 +221,57 @@ static HEAP_MEM: SafeHeap = SafeHeap {
     mem: core::cell::UnsafeCell::new([0; 256 * 1024]),
 };
 
+/// Configures CR0 and CR4 registers to enable SSE and FPU on raw hardware.
+pub fn enable_sse() {
+    use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
+
+    unsafe {
+        // 1. Configure CR0
+        let mut cr0 = Cr0::read();
+        cr0.remove(Cr0Flags::EMULATE_COPROCESSOR); // Clear EM bit
+        cr0.insert(Cr0Flags::MONITOR_COPROCESSOR); // Set MP bit
+        Cr0::write(cr0);
+
+        // 2. Configure CR4
+        let mut cr4 = Cr4::read();
+        cr4.insert(Cr4Flags::OSFXSR); // Enable FXSAVE/FXRSTOR
+        cr4.insert(Cr4Flags::OSXMMEXCPT_ENABLE); // Enable SIMD floating-point exceptions
+        Cr4::write(cr4);
+    }
+}
+
+// Static Interrupt Descriptor Table (IDT)
+static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
+
+/// Initializes and loads the Interrupt Descriptor Table (IDT)
+pub fn init_idt() {
+    unsafe {
+        IDT.breakpoint.set_handler_fn(breakpoint_handler);
+        IDT.double_fault.set_handler_fn(double_fault_handler);
+        IDT.page_fault.set_handler_fn(page_fault_handler);
+        IDT.load();
+    }
+}
+
+extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
+    println!("\x1B[38;5;220m[CPU EXCEPTION] Breakpoint Interrupt:\x1B[0m");
+    println!("{:#?}", stack_frame);
+}
+
+extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) -> ! {
+    panic!("[CPU CATASTROPHIC] Double Fault Exception (error code: {}):\n{:#?}", error_code, stack_frame);
+}
+
+extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode) {
+    use x86_64::registers::control::Cr2;
+    println!("\x1B[38;5;196m[CPU EXCEPTION] Page Fault accessing address: {:#X}\x1B[0m", Cr2::read().as_u64());
+    println!("Error Code: {:?}", error_code);
+    println!("{:#?}", stack_frame);
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
+
 // Register entry point macro with bootloader crate
 bootloader::entry_point!(kernel_main);
 
@@ -242,7 +295,11 @@ fn kernel_main(_boot_info: &'static bootloader::BootInfo) -> ! {
         writer.init();
     }
 
-    // 2. Initialize global lock-free heap memory allocator
+    // 2. Enable SSE and initialize IDT
+    enable_sse();
+    init_idt();
+
+    // 3. Initialize global lock-free heap memory allocator
     let heap_ptr = HEAP_MEM.mem.get() as *mut u8;
     let heap_size = 256 * 1024;
     ALLOCATOR.init(heap_ptr as usize, heap_size);
