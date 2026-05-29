@@ -132,7 +132,7 @@ Instead of relying on outdated `0xB8000` VGA text mode (which crashes on modern 
 *   **Interactive Event Terminal**: Echoes PS/2 keyboard strikes in real-time with pixel-perfect font scaling using an embedded 8x8 bitmap font.
 *   **Dynamic Progress Indicators**: Heartbeat pulse representing the active scheduler time slice.
 
-![AE Rustanium UEFI Graphics Console](knowledge/uefi_console.png)
+![AE Rustanium UEFI Graphics Console](assets/uefi_console.png)
 
 ### 🔌 Physical Hardware Optimization & Safety
 For native booting on modern flight hardware (such as AMD Ryzen platforms), several critical architectural enhancements have been implemented:
