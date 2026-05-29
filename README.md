@@ -136,7 +136,7 @@ Instead of relying on outdated `0xB8000` VGA text mode (which crashes on modern 
 
 ![AE Rustanium UEFI Telemetry Dashboard](assets/uefi_console.png)
 
-#### 🖥️ F1 — Full-Screen TTY Console (Linux 8×16 Bitmap Font)
+#### 🖥️ F1 — Full-Screen TTY Console (8×16 Bitmap Font)
 A dedicated bare-metal virtual terminal powered by the authentic **Linux kernel 8×16 monospace bitmap font** (extracted directly from `lib/fonts/font_8x16.c`):
 *   **250-line scrollback history** with Page Up / Page Down navigation and a live scrollbar thumb.
 *   **ANSI color-coded log output**: system messages, kernel events, errors, and healing events each render in distinct colors.
