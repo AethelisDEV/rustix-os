@@ -169,7 +169,7 @@ This command programmatically:
 
 ---
 
-### 🔌 Booting on a Real UEFI PC (e.g. Ryzen 7500F / RTX 3070 Ti)
+### 🔌 Booting on a Real UEFI PC 
 To boot this kernel on your physical computer:
 1. Locate the generated **`uefi.img`** at `target/x86_64-unknown-none/debug/uefi.img` (or `release/uefi.img` if compiled with `cargo run --package runner -- --release`).
 2. Insert a USB flash drive.
