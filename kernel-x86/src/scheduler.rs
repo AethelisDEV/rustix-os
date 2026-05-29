@@ -158,29 +158,50 @@ pub static SCHEDULER: crate::Spinlock<Scheduler> = crate::Spinlock::new(Schedule
 /// # Safety
 /// This is highly unsafe because it directly manipulates the CPU stack pointer
 /// and caller-preserved registers, altering the flow of execution.
-#[unsafe(naked)]
-#[no_mangle]
-pub unsafe extern "C" fn switch_context(old_rsp: *mut u64, new_rsp: u64) {
-    core::arch::naked_asm!(
-        // 1. Push callee-preserved registers onto old stack
-        "push rbp",
-        "push rbx",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        // 2. Save old stack pointer RSP into old_rsp memory address
-        "mov [rdi], rsp",
-        // 3. Load new stack pointer RSP from new_rsp
-        "mov rsp, rsi",
-        // 4. Pop callee-preserved registers from new stack
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop rbx",
-        "pop rbp",
-        // 5. Return to the instruction pointer stored on the new stack
-        "ret"
-    );
+///
+/// Implemented via `global_asm!` so the LLVM naked-function stack-alignment
+/// validator does not reject the intentionally asymmetric push/pop sequence.
+core::arch::global_asm!(
+    ".globl switch_context",
+    "switch_context:",
+    // 1. Push callee-preserved registers onto old stack (6 × 8 = 48 bytes)
+    "push rbp",
+    "push rbx",
+    "push r12",
+    "push r13",
+    "push r14",
+    "push r15",
+    // 2. Save old RSP (pointer passed in rdi) to memory
+    "mov [rdi], rsp",
+    // 3. Load new RSP from rsi (new thread's saved stack pointer)
+    "mov rsp, rsi",
+    // 4. Restore callee-preserved registers from new stack
+    "pop r15",
+    "pop r14",
+    "pop r13",
+    "pop r12",
+    "pop rbx",
+    "pop rbp",
+    // 5. Jump to the return address on top of the new stack
+    "ret",
+);
+
+/// External declaration so Rust code can call the assembly function.
+///
+/// # Safety
+/// Caller must ensure `old_rsp` points to a valid u64 slot and that
+/// `new_rsp` points to a correctly initialised thread stack.
+#[allow(dead_code)]
+unsafe extern "C" {
+    #[no_mangle]
+    fn switch_context(old_rsp: *mut u64, new_rsp: u64);
+}
+
+/// Public safe wrapper around the unsafe assembly context switcher.
+///
+/// # Safety
+/// `old_rsp` must point to a valid u64 slot and `new_rsp` must be a correctly
+/// initialised thread stack from `Scheduler::spawn`.
+pub unsafe fn do_switch_context(old_rsp: *mut u64, new_rsp: u64) {
+    switch_context(old_rsp, new_rsp);
 }

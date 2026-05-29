@@ -1,4 +1,8 @@
 /target
 /memory-bank
 /knowledge
+/scratch
 
+# Runtime log artefacts
+*.log
+qemu_err.log

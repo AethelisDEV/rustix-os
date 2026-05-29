@@ -159,6 +159,17 @@ static FONT_8X8: [[u8; 8]; 128] = {
     font
 };
 
+/// Gömülü 8x16 Monospace Bitmap Font
+/// Wrapped in a 16-byte aligned newtype to satisfy linker alignment requirements.
+#[repr(align(16))]
+struct AlignedFont(pub [u8; 4096]);
+static FONT_8X16_DATA: AlignedFont = AlignedFont(*include_bytes!("../../assets/font_8x16.bin"));
+// Convenience reference into the aligned wrapper
+macro_rules! font_8x16_byte {
+    ($idx:expr) => { FONT_8X16_DATA.0[$idx] };
+}
+
+
 /// High-level UEFI Graphics driver interface.
 pub struct UefiGraphics {
     buffer: &'static mut [u8],
@@ -296,6 +307,51 @@ impl UefiGraphics {
         }
     }
 
+    /// Renders a single 8x16 character at specified coordinates with custom scale and colors.
+    pub fn draw_char_8x16(&mut self, x: usize, y: usize, c: char, color: Color, bg: Option<Color>, scale: usize) {
+        let ascii = c as usize;
+        if ascii >= 256 {
+            return;
+        }
+        let char_offset = ascii * 16;
+
+        for row in 0..16 {
+            let byte = FONT_8X16_DATA.0[char_offset + row];
+            for col in 0..8 {
+                // Font bitmap bits are MSB to LSB
+                let bit = (byte >> (7 - col)) & 1;
+                if bit == 1 {
+                    if scale == 1 {
+                        self.write_pixel(x + col, y + row, color);
+                    } else {
+                        self.draw_rect(x + col * scale, y + row * scale, scale, scale, color);
+                    }
+                } else if let Some(bg_color) = bg {
+                    if scale == 1 {
+                        self.write_pixel(x + col, y + row, bg_color);
+                    } else {
+                        self.draw_rect(x + col * scale, y + row * scale, scale, scale, bg_color);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Draws an ASCII string using the 8x16 font with character wrapping.
+    pub fn draw_string_8x16(&mut self, mut x: usize, y: usize, text: &str, color: Color, bg: Option<Color>, scale: usize) {
+        let char_w = 8 * scale;
+        let spacing = 1 * scale;
+        
+        for c in text.chars() {
+            if x + char_w >= self.width {
+                break; // Screen bounds check
+            }
+            self.draw_char_8x16(x, y, c, color, bg, scale);
+            x += char_w + spacing;
+        }
+    }
+
+
     /// Renders a modern, space-grade dashboard visual console onto the active monitor.
     pub fn draw_dashboard_layout(&mut self, ticks: usize, logs: &[alloc::string::String]) {
         // 1. Sleek Charcoal Background
@@ -339,19 +395,145 @@ impl UefiGraphics {
         self.draw_string(956, 164, "ECC State    : Safe / Self-Healed", COLOR_TEXT_MUTED, None, 1);
         self.draw_string(956, 184, "Scheduler    : Asynchronous (100Hz)", COLOR_TEXT_MUTED, None, 1);
 
-        // 6. Rolling Console Logs Box
-        self.draw_rect(40, 260, 1200, 400, COLOR_PANEL_BG);
-        self.draw_rect(40, 260, 1200, 4, COLOR_ACCENT_BLUE);
-        self.draw_string(60, 280, "REAL-TIME MICROKERNEL EVENTS STREAM (COM1 SERIAL REPLICATED)", COLOR_TEXT_WHITE, None, 1);
-        self.draw_rect(60, 304, 1160, 1, COLOR_TEXT_MUTED); // Horizontal divider
+        // 6. Static System Architecture Info Panel (replaces rolling log box)
+        // Left column: Kernel & Architecture
+        self.draw_rect(40, 260, 585, 260, COLOR_PANEL_BG);
+        self.draw_rect(40, 260, 585, 4, COLOR_ACCENT_BLUE);
+        self.draw_string(60, 276, "KERNEL ARCHITECTURE", COLOR_TEXT_WHITE, None, 1);
+        self.draw_rect(60, 296, 545, 1, COLOR_TEXT_MUTED);
+        self.draw_string(60, 308, "Arch       :  x86_64 Long Mode (64-bit)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 328, "Boot       :  UEFI GOP + Legacy BIOS MBR", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 348, "Runtime    :  no_std bare-metal (zero OS)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 368, "Language   :  100% Rust (nightly, unsafe-ok)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 388, "Font       :  8x16 Bitmap", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 408, "Interrupts :  IDT + 8259 PIC (IRQ 0/1)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 428, "Keyboard   :  PS/2 Direct I/O Port Poll", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 448, "Heap       :  1 MB LockedHeap (linked-list)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 468, "Paging     :  4-Level (PML4) by bootloader", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(60, 488, "FPU / SSE  :  Enabled via CR0/CR4 flags", COLOR_ACCENT_GREEN, None, 1);
 
-        // Draw rolling logs from the buffer
-        for (idx, line) in logs.iter().enumerate() {
-            if idx >= 8 {
-                break;
+        // Right column: Security & Reliability
+        self.draw_rect(655, 260, 585, 260, COLOR_PANEL_BG);
+        self.draw_rect(655, 260, 585, 4, COLOR_ACCENT_PURPLE);
+        self.draw_string(675, 276, "SAFETY & RELIABILITY SUBSYSTEMS", COLOR_TEXT_WHITE, None, 1);
+        self.draw_rect(675, 296, 545, 1, COLOR_TEXT_MUTED);
+        self.draw_string(675, 308, "Scheduler  :  Cooperative Round-Robin (3 threads)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 328, "Memory ECC :  SECDED Single-Error Correct", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 348, "Redundancy :  Triple Modular Redundancy (TMR)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 368, "TMR Voter  :  Bit-level majority voter online", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 388, "VFS        :  In-memory inode-based filesystem", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 408, "Quarantine :  Faulty page isolation & healing", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 428, "Services   :  Telemetry / Navigation / LifeSupport", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 448, "COM1 UART  :  0x3F8 serial mirror (9600 baud)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 468, "Scrubber   :  Periodic radiation sweep (Thread 1)", COLOR_TEXT_MUTED, None, 1);
+        self.draw_string(675, 488, "Diagnostics:  Live telemetry burst (Thread 2)", COLOR_ACCENT_GREEN, None, 1);
+
+        
+        // Draw modern interactive buttons/tabs
+        self.draw_navigation_tabs(false);
+        
+        // Solid Glowing Progress Bar at the bottom
+        let bar_width = ((ticks * 8) % 1160) as usize;
+        self.draw_rect(60, 610, 1160, 12, COLOR_BG); // Clear background bar
+        self.draw_rect(60, 610, bar_width, 12, COLOR_ACCENT_GREEN); // Fill bar
+        self.draw_string(60, 630, "System heartbeat tick pulse - Dynamic Scheduler Execution Line", COLOR_TEXT_MUTED, None, 1);
+    }
+
+    /// Draws the modern space-grade interactive mode buttons/tabs at the bottom.
+    pub fn draw_navigation_tabs(&mut self, is_tty: bool) {
+        let tty_tab_x = 60;
+        let tty_tab_y = 550;
+        let tty_tab_w = 200;
+        let tty_tab_h = 32;
+
+        let db_tab_x = 280;
+        let db_tab_y = 550;
+        let db_tab_w = 240;
+        let db_tab_h = 32;
+
+        // Colors
+        let active_color = COLOR_ACCENT_BLUE;
+        let inactive_color = COLOR_PANEL_BG;
+        let border_color = Color::new(80, 85, 95);
+
+        // 1. TTY Console Tab
+        if is_tty {
+            // Active Tab (Glowing Cyan-Blue)
+            self.draw_rect(tty_tab_x, tty_tab_y, tty_tab_w, tty_tab_h, active_color);
+            self.draw_string(tty_tab_x + 14, tty_tab_y + 9, "★ [F1] TTY CONSOLE", COLOR_TEXT_WHITE, None, 1);
+        } else {
+            // Inactive Tab
+            self.draw_rect(tty_tab_x, tty_tab_y, tty_tab_w, tty_tab_h, inactive_color);
+            // Draw border
+            for i in 0..tty_tab_w {
+                self.write_pixel(tty_tab_x + i, tty_tab_y, border_color);
+                self.write_pixel(tty_tab_x + i, tty_tab_y + tty_tab_h - 1, border_color);
             }
-            let y = 324 + idx * 20;
-            let color = if line.starts_with(">>>") || line.starts_with("[SYSTEM]") || line.starts_with("[BOOT]") || line.starts_with("[KERNEL]") {
+            for i in 0..tty_tab_h {
+                self.write_pixel(tty_tab_x, tty_tab_y + i, border_color);
+                self.write_pixel(tty_tab_x + tty_tab_w - 1, tty_tab_y + i, border_color);
+            }
+            self.draw_string(tty_tab_x + 24, tty_tab_y + 9, "[F1] TTY CONSOLE", COLOR_TEXT_MUTED, None, 1);
+        }
+
+        // 2. Dashboard Tab
+        if !is_tty {
+            // Active Tab (Glowing Deep Purple)
+            self.draw_rect(db_tab_x, db_tab_y, db_tab_w, db_tab_h, COLOR_ACCENT_PURPLE);
+            self.draw_string(db_tab_x + 0, db_tab_y + 9, "★ [F2] TELEMETRY DASHBOARD", COLOR_TEXT_WHITE, None, 1);
+        } else {
+            // Inactive Tab
+            self.draw_rect(db_tab_x, db_tab_y, db_tab_w, db_tab_h, inactive_color);
+            // Draw border
+            for i in 0..db_tab_w {
+                self.write_pixel(db_tab_x + i, db_tab_y, border_color);
+                self.write_pixel(db_tab_x + i, db_tab_y + db_tab_h - 1, border_color);
+            }
+            for i in 0..db_tab_h {
+                self.write_pixel(db_tab_x, db_tab_y + i, border_color);
+                self.write_pixel(db_tab_x + db_tab_w - 1, db_tab_y + i, border_color);
+            }
+            self.draw_string(db_tab_x + 10, db_tab_y + 9, "[F2] TELEMETRY DASHBOARD", COLOR_TEXT_MUTED, None, 1);
+        }
+    }
+
+    /// Renders the full-screen virtual terminal (TTY) console layout using the 8x16 font.
+    pub fn draw_tty_layout(&mut self, ticks: usize, logs: &[alloc::string::String], scroll_offset: usize, line_buffer: &str, cwd: &str) {
+        // 1. Sleek Charcoal Background
+        self.clear(COLOR_BG);
+
+        // 2. Vibrant Color Gradient Header bar (cyan-blue to deep purple) using 8x16 font
+        self.draw_horizontal_gradient_rect(0, 0, self.width, 48, COLOR_ACCENT_BLUE, COLOR_ACCENT_PURPLE);
+        self.draw_string_8x16(24, 16, "AE RUSTANIUM TTY - VIRTUAL CONSOLE TTY1 (8x16 Font)", COLOR_TEXT_WHITE, None, 1);
+        
+        let uptime_secs = ticks / 50;
+        let mut uptime_buf = [0u8; 32];
+        let uptime_str = format_uptime(uptime_secs, &mut uptime_buf);
+        self.draw_string_8x16(self.width - 320, 16, uptime_str, COLOR_ACCENT_GREEN, None, 1);
+
+        // 3. Render Scrollback Logs (y: 80 to 520, height 440)
+        // Each character line is 16px high + 4px vertical spacing = 20px.
+        // That gives 440 / 20 = 22 visible lines.
+        let visible_lines = 22;
+        let total_lines = logs.len();
+        
+        // Calculate slice indices based on scrollback offset from bottom
+        let end_idx = if total_lines > scroll_offset {
+            total_lines - scroll_offset
+        } else {
+            0
+        };
+        let start_idx = if end_idx > visible_lines {
+            end_idx - visible_lines
+        } else {
+            0
+        };
+
+        let active_slice = &logs[start_idx..end_idx];
+
+        for (idx, line) in active_slice.iter().enumerate() {
+            let y = 80 + idx * 20;
+            let color = if line.starts_with(">>>") || line.starts_with("[SYSTEM]") || line.starts_with("[BOOT]") || line.contains("[KERNEL]") {
                 COLOR_TEXT_MUTED
             } else if line.contains("[THREAD") {
                 COLOR_ACCENT_BLUE
@@ -362,17 +544,133 @@ impl UefiGraphics {
             } else {
                 COLOR_TEXT_WHITE
             };
-            self.draw_string(60, y, line, color, None, 1);
+            self.draw_string_8x16(60, y, line, color, None, 1);
         }
-        
-        self.draw_string(60, 484, ">>> INTERACTIVE PS/2 KEYBOARD ECHO (Strike keys to print on real hardware):", COLOR_TEXT_WHITE, None, 1);
-        
-        // Solid Glowing Progress Bar at the bottom
+
+        // 4. Render Scrollbar Track
+        let scroll_track_x = 1240;
+        let scroll_track_y = 80;
+        let scroll_track_w = 8;
+        let scroll_track_h = 440;
+        let scroll_track_color = Color::new(24, 28, 34);
+        self.draw_rect(scroll_track_x, scroll_track_y, scroll_track_w, scroll_track_h, scroll_track_color);
+
+        if total_lines > visible_lines {
+            // Draw Scrollbar Thumb
+            let thumb_h = core::cmp::max(30, (scroll_track_h * visible_lines) / total_lines);
+            let max_scroll = total_lines - visible_lines;
+            let scroll_ratio = scroll_offset as f32 / max_scroll as f32;
+            let thumb_y = scroll_track_y + scroll_track_h - thumb_h - ((scroll_track_h - thumb_h) as f32 * scroll_ratio) as usize;
+            self.draw_rect(scroll_track_x, thumb_y, scroll_track_w, thumb_h, COLOR_ACCENT_BLUE);
+        }
+
+        // Divider
+        self.draw_rect(40, 535, 1200, 1, Color::new(80, 85, 95));
+
+        // 5. Active Command Prompt (y: 550) using 8x16 font
+        let mut prompt_buf = alloc::string::String::new();
+        prompt_buf.push_str("rustanium:");
+        prompt_buf.push_str(cwd);
+        prompt_buf.push_str("> ");
+        prompt_buf.push_str(line_buffer);
+        self.draw_string_8x16(60, 550, &prompt_buf, COLOR_ACCENT_GREEN, None, 1);
+
+        // 6. Visual navigation buttons
+        self.draw_navigation_tabs(true);
+
+        // 7. Heartbeat progress bar at bottom
         let bar_width = ((ticks * 8) % 1160) as usize;
-        self.draw_rect(60, 610, 1160, 12, COLOR_BG); // Clear background bar
-        self.draw_rect(60, 610, bar_width, 12, COLOR_ACCENT_GREEN); // Fill bar
-        self.draw_string(60, 630, "System heartbeat tick pulse - Dynamic Scheduler Execution Line", COLOR_TEXT_MUTED, None, 1);
+        self.draw_rect(60, 660, 1160, 12, COLOR_BG);
+        self.draw_rect(60, 660, bar_width, 12, COLOR_ACCENT_GREEN);
+        self.draw_string_8x16(60, 680, "TTY Console heartbeat tick pulse - [ESC / F2] Back to Telemetry", COLOR_TEXT_MUTED, None, 1);
     }
+
+    /// Dynamically updates ONLY the active telemetry values on the TTY layout
+    /// (uptime header, bottom progress bar) to completely eliminate TTY flickering!
+    pub fn update_tty_telemetry(&mut self, ticks: usize) {
+        // 1. Update Uptime Header (x: self.width - 320, y: 16)
+        self.draw_rect(self.width - 320, 16, 280, 16, COLOR_ACCENT_PURPLE);
+        
+        let uptime_secs = ticks / 50;
+        let mut uptime_buf = [0u8; 32];
+        let uptime_str = format_uptime(uptime_secs, &mut uptime_buf);
+        self.draw_string_8x16(self.width - 320, 16, uptime_str, COLOR_ACCENT_GREEN, None, 1);
+
+        // 2. Update Heartbeat Progress Bar (x: 60, y: 660)
+        let bar_width = ((ticks * 8) % 1160) as usize;
+        self.draw_rect(60, 660, 1160, 12, COLOR_BG); // Clear progress bar background
+        self.draw_rect(60, 660, bar_width, 12, COLOR_ACCENT_GREEN); // Draw new filled progress
+    }
+
+    /// Dynamically updates the TTY active prompt line without touching other areas.
+    pub fn update_tty_prompt(&mut self, line_buffer: &str, cwd: &str) {
+        // Clear prompt area (x: 60, y: 550, w: 1160, h: 16) using main Background Color
+        self.draw_rect(60, 550, 1160, 16, COLOR_BG);
+        
+        let mut prompt_buf = alloc::string::String::new();
+        prompt_buf.push_str("rustanium:");
+        prompt_buf.push_str(cwd);
+        prompt_buf.push_str("> ");
+        prompt_buf.push_str(line_buffer);
+        self.draw_string_8x16(60, 550, &prompt_buf, COLOR_ACCENT_GREEN, None, 1);
+    }
+
+    /// Dynamically redraws the logs panel and the scrollbar inside TTY view.
+    pub fn update_tty_logs(&mut self, logs: &[alloc::string::String], scroll_offset: usize) {
+        // Clear only the logs area (x: 60, y: 80, w: 1170, h: 440) using Background Color
+        self.draw_rect(60, 80, 1170, 440, COLOR_BG);
+
+        let visible_lines = 22;
+        let total_lines = logs.len();
+        
+        let end_idx = if total_lines > scroll_offset {
+            total_lines - scroll_offset
+        } else {
+            0
+        };
+        let start_idx = if end_idx > visible_lines {
+            end_idx - visible_lines
+        } else {
+            0
+        };
+
+        let active_slice = &logs[start_idx..end_idx];
+
+        for (idx, line) in active_slice.iter().enumerate() {
+            let y = 80 + idx * 20;
+            let color = if line.starts_with(">>>") || line.starts_with("[SYSTEM]") || line.starts_with("[BOOT]") || line.contains("[KERNEL]") {
+                COLOR_TEXT_MUTED
+            } else if line.contains("[THREAD") {
+                COLOR_ACCENT_BLUE
+            } else if line.contains("[QUARANTINE") || line.contains("[VFS ERR]") || line.contains("Unknown command") {
+                Color::new(255, 60, 60)
+            } else if line.contains("[HEALING") {
+                COLOR_ACCENT_GREEN
+            } else {
+                COLOR_TEXT_WHITE
+            };
+            self.draw_string_8x16(60, y, line, color, None, 1);
+        }
+
+        // Clear and update the Scrollbar Track & Thumb
+        let scroll_track_x = 1240;
+        let scroll_track_y = 80;
+        let scroll_track_w = 8;
+        let scroll_track_h = 440;
+        let scroll_track_color = Color::new(24, 28, 34);
+        self.draw_rect(scroll_track_x, scroll_track_y, scroll_track_w, scroll_track_h, scroll_track_color);
+
+        if total_lines > visible_lines {
+            // Draw Scrollbar Thumb
+            let thumb_h = core::cmp::max(30, (scroll_track_h * visible_lines) / total_lines);
+            let max_scroll = total_lines - visible_lines;
+            let scroll_ratio = scroll_offset as f32 / max_scroll as f32;
+            let thumb_y = scroll_track_y + scroll_track_h - thumb_h - ((scroll_track_h - thumb_h) as f32 * scroll_ratio) as usize;
+            self.draw_rect(scroll_track_x, thumb_y, scroll_track_w, thumb_h, COLOR_ACCENT_BLUE);
+        }
+    }
+
+
 
     /// Dynamically updates ONLY the active telemetry values on the dashboard (ticks, progress bar)
     /// without clearing or redrawing the static panels. This completely eliminates screen flickering!
@@ -400,31 +698,6 @@ impl UefiGraphics {
         self.draw_string(60, 514, text, COLOR_ACCENT_GREEN, None, 1);
     }
 
-    /// Dynamically redraws the rolling logs in the logs panel.
-    pub fn update_dashboard_logs(&mut self, logs: &[alloc::string::String]) {
-        // Clear the logs drawing area using Panel Background Color (x: 60, y: 324, w: 1160, h: 156)
-        self.draw_rect(60, 324, 1160, 156, COLOR_PANEL_BG);
-
-        // Draw up to 8 lines of logs
-        for (idx, line) in logs.iter().enumerate() {
-            if idx >= 8 {
-                break;
-            }
-            let y = 324 + idx * 20;
-            let color = if line.starts_with(">>>") || line.starts_with("[SYSTEM]") || line.starts_with("[BOOT]") || line.starts_with("[KERNEL]") {
-                COLOR_TEXT_MUTED
-            } else if line.contains("[THREAD") {
-                COLOR_ACCENT_BLUE
-            } else if line.contains("[QUARANTINE") || line.contains("[VFS ERR]") || line.contains("Unknown command") {
-                Color::new(255, 60, 60)
-            } else if line.contains("[HEALING") {
-                COLOR_ACCENT_GREEN
-            } else {
-                COLOR_TEXT_WHITE
-            };
-            self.draw_string(60, y, line, color, None, 1);
-        }
-    }
 }
 
 /// Dynamic u32 to string formatter inside bare-metal no_std environment.
@@ -440,6 +713,31 @@ fn format_ticks(mut ticks: usize, buf: &mut [u8; 16]) -> &str {
     }
     core::str::from_utf8(&buf[i + 1..16]).unwrap_or("0")
 }
+
+/// Dynamic seconds to uptime string formatter.
+fn format_uptime(mut secs: usize, buf: &mut [u8; 32]) -> &str {
+    if secs == 0 {
+        return "UPTIME: 0s";
+    }
+    let mut i = 31;
+    buf[i] = b's';
+    i -= 1;
+    while secs > 0 && i > 8 {
+        buf[i] = b'0' + (secs % 10) as u8;
+        secs /= 10;
+        i -= 1;
+    }
+    buf[i] = b' ';
+    buf[i-1] = b':';
+    buf[i-2] = b'E';
+    buf[i-3] = b'M';
+    buf[i-4] = b'I';
+    buf[i-5] = b'T';
+    buf[i-6] = b'P';
+    buf[i-7] = b'U';
+    core::str::from_utf8(&buf[i-7..32]).unwrap_or("UPTIME: Unknown")
+}
+
 
 /// A direct formatting writer that prints text directly onto the UEFI GOP framebuffer.
 /// Used in panic/crash handlers where dynamic memory allocation is unsafe or offline.

@@ -18,6 +18,7 @@ Built for environments susceptible to Single Event Upsets (SEUs) such as aerospa
 *   **☣️ Dynamic Page Quarantine & Hot-Swap**: If a physical memory frame experiences a severe, uncorrectable double-bit flip, the microkernel quarantines that frame, dynamically allocates a healthy one, and relocates active task memory transparently.
 *   **🗳️ Triple Modular Redundancy (TMR)**: Protects critical calculations (e.g., flight control navigation) from register/ALU corruption by executing tasks in triplicate. An ALU voter uses 2-out-of-3 majority rule to repair register state on the fly.
 *   **🗄️ Unix-Like Inode VFS**: A fully decoupled Virtual File System that writes, reads, and maps directories and files directly onto the ECC-protected virtual physical memory blocks.
+*   **🖥️ Dual-Mode UEFI GOP Console**: A premium dark-themed visual interface with two switchable modes — a **Telemetry Dashboard** (F2) showing live system metrics & static architecture info, and a full-screen **TTY Console** (F1) with Linux kernel 8×16 bitmap font, scrollback history (Page Up/Down), and interactive PS/2 keyboard shell.
 *   **🛸 Retro Aerospace Visual Console**: A beautiful, terminal-based real-time telemetry dashboard styled using raw ANSI escape codes. Observe scrubber sweeps, memory grid status, TMR voters, and interactively inject radiation faults!
 
 ---
@@ -126,13 +127,23 @@ cargo clippy --workspace -- -D warnings
 The `kernel-x86` crate is a fully-fledged bare-metal x86-64 operating system target. Using the `bootloader_api` (v0.11) framework, it supports booting on both legacy BIOS systems and modern UEFI flight computers (such as Ryzen 7000/9000 AM5 series PCs).
 
 ### 🖥️ High-Performance UEFI GOP Framebuffer Graphics
-Instead of relying on outdated `0xB8000` VGA text mode (which crashes on modern UEFI systems), AE Rustanium dynamically binds to the UEFI **Graphics Output Protocol (GOP)** linear framebuffer. It renders an extremely premium, dark-themed visual dashboard containing:
-*   **Active Thread Status Cards**: Live rendering of Thread 1 (Memory Scrubber sweep) and Thread 2 (Telemetry engine).
-*   **System Diagnostics metrics**: Live ticks and voter health percentage.
-*   **Interactive Event Terminal**: Echoes PS/2 keyboard strikes in real-time with pixel-perfect font scaling using an embedded 8x8 bitmap font.
-*   **Dynamic Progress Indicators**: Heartbeat pulse representing the active scheduler time slice.
+Instead of relying on outdated `0xB8000` VGA text mode (which crashes on modern UEFI systems), AE Rustanium dynamically binds to the UEFI **Graphics Output Protocol (GOP)** linear framebuffer. It provides a dual-mode premium dark-themed console:
 
-![AE Rustanium UEFI Graphics Console](assets/uefi_console.png)
+#### 📊 F2 — Telemetry Dashboard
+*   **Active Thread Status Cards**: Live rendering of Thread 1 (Memory Scrubber) and Thread 2 (Telemetry engine).
+*   **System Diagnostics Panel**: Live ticks, voter health percentage, and a dynamic heartbeat progress bar.
+*   **Static Architecture Info Panel**: Two-column reference display of kernel architecture and safety/reliability subsystems — drawn once at boot, zero flicker.
+
+![AE Rustanium UEFI Telemetry Dashboard](assets/uefi_console.png)
+
+#### 🖥️ F1 — Full-Screen TTY Console (Linux 8×16 Bitmap Font)
+A dedicated bare-metal virtual terminal powered by the authentic **Linux kernel 8×16 monospace bitmap font** (extracted directly from `lib/fonts/font_8x16.c`):
+*   **250-line scrollback history** with Page Up / Page Down navigation and a live scrollbar thumb.
+*   **ANSI color-coded log output**: system messages, kernel events, errors, and healing events each render in distinct colors.
+*   **Flicker-free partial updates**: only the changed region (logs, prompt, or uptime bar) is redrawn on each tick — no full-screen clear.
+*   **Interactive PS/2 shell**: type commands directly (`ls`, `cat`, `mkdir`, `write`, `free`, `uname`, `uptime`, etc.) with a live cursor prompt.
+
+![AE Rustanium TTY Console (8x16 Font)](assets/tty_console.png)
 
 ### 🔌 Physical Hardware Optimization & Safety
 For native booting on modern flight hardware (such as AMD Ryzen platforms), several critical architectural enhancements have been implemented:

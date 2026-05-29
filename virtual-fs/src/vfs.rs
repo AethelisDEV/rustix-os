@@ -335,6 +335,98 @@ impl VirtualFileSystem {
         }
         Ok(())
     }
+
+    /// Copies a file from `src_path` to a new file named `dst_name` inside `dst_parent_path`.
+    ///
+    /// Reads the source file bytes (with self-healing if needed), creates the destination
+    /// file, and writes the data using the supplied allocator and PID.
+    pub fn copy_file(
+        &mut self,
+        src_path: &str,
+        dst_parent_path: &str,
+        dst_name: &str,
+        allocator: &mut MemoryAllocator,
+        pid: u32,
+    ) -> Result<(), &'static str> {
+        // Read source bytes first (may trigger hot-swap self-healing)
+        let data = self.read_file(src_path, allocator)?;
+
+        // Create the destination file node
+        self.create_file(dst_parent_path, dst_name)?;
+
+        // Build absolute destination path
+        let dst_path = if dst_parent_path == "/" {
+            alloc::format!("/{}", dst_name)
+        } else {
+            alloc::format!("{}/{}", dst_parent_path, dst_name)
+        };
+
+        // Write data to the new node
+        self.write_file(&dst_path, &data, allocator, pid)
+    }
+
+    /// Moves (renames) a node from `src_path` to `dst_parent_path` with new name `dst_name`.
+    ///
+    /// Re-parents the inode: removes it from its old directory listing and inserts it into
+    /// the destination directory.  No data is copied — only the directory entries change.
+    pub fn rename_node(
+        &mut self,
+        src_path: &str,
+        dst_parent_path: &str,
+        dst_name: &str,
+    ) -> Result<(), &'static str> {
+        if src_path == "/" {
+            return Err("Cannot rename the root directory.");
+        }
+
+        // Resolve source and destination
+        let src_idx = self.resolve_path(src_path)?;
+        let dst_parent_idx = self.resolve_path(dst_parent_path)?;
+
+        if !self.inodes[dst_parent_idx].is_directory() {
+            return Err("Destination parent is not a directory.");
+        }
+
+        // Check that the new name is available in the destination
+        if let InodeType::Directory { entries } = &self.inodes[dst_parent_idx].inode_type {
+            for (name, _) in entries {
+                if name == dst_name {
+                    return Err("A file or directory with that name already exists.");
+                }
+            }
+        }
+
+        // Identify source parent so we can remove its old directory entry
+        let (src_parent_str, src_name_str) = {
+            let path = src_path.trim_end_matches('/');
+            if let Some(pos) = path.rfind('/') {
+                let parent = &path[..pos];
+                let parent = if parent.is_empty() { "/" } else { parent };
+                (String::from(parent), String::from(&path[pos + 1..]))
+            } else {
+                (String::from("/"), String::from(path))
+            }
+        };
+
+        let src_parent_idx = self.resolve_path(&src_parent_str)?;
+
+        // Remove entry from old parent
+        if let InodeType::Directory { entries } = &mut self.inodes[src_parent_idx].inode_type {
+            if let Some(pos) = entries.iter().position(|(n, _)| n == &src_name_str) {
+                entries.remove(pos);
+            }
+        }
+
+        // Rename the inode itself
+        self.inodes[src_idx].name = String::from(dst_name);
+
+        // Register under new parent
+        if let InodeType::Directory { entries } = &mut self.inodes[dst_parent_idx].inode_type {
+            entries.push((String::from(dst_name), src_idx));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

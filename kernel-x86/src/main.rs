@@ -30,33 +30,58 @@ pub static GRAPHICS: Spinlock<Option<framebuffer::UefiGraphics>> = Spinlock::new
 /// Global running system ticks count.
 pub static SYSTEM_TICKS: AtomicUsize = AtomicUsize::new(0);
 
-/// Global atomic flags to prevent boot-stage allocator panics
+/// Global atomic flag to prevent boot-stage allocator panics
 pub static ALLOCATOR_READY: AtomicBool = AtomicBool::new(false);
+/// Retained for potential future use; dashboard now uses static panel.
 pub static LOGS_CHANGED: AtomicBool = AtomicBool::new(false);
 
-/// Global rolling log buffer holding the last 8 printed messages
-pub static SYSTEM_LOGS: Spinlock<alloc::vec::Vec<alloc::string::String>> = Spinlock::new(alloc::vec::Vec::new());
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenMode {
+    Dashboard,
+    Tty,
+}
 
-/// Appends a new message line to the global rolling log buffer.
+/// Global active screen mode.
+pub static CURRENT_SCREEN_MODE: Spinlock<ScreenMode> = Spinlock::new(ScreenMode::Dashboard);
+
+/// Global scrollback offset for full-screen TTY view.
+pub static TTY_SCROLL_OFFSET: Spinlock<usize> = Spinlock::new(0);
+
+/// Global full-screen TTY logs buffer (up to 250 lines).
+pub static TTY_LOGS: Spinlock<alloc::vec::Vec<alloc::string::String>> = Spinlock::new(alloc::vec::Vec::new());
+
+/// Global flag signifying that the TTY console needs a re-render.
+pub static TTY_LOGS_CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// Appends a new message line to the TTY scrollback log buffer.
 pub fn append_log(msg: &str) {
-    let mut logs = SYSTEM_LOGS.lock();
+    let mut tty_logs = TTY_LOGS.lock();
+    let mut appended = false;
     for line in msg.lines() {
         let cleaned = line.replace("\r", "");
         // Ignore empty lines
         if cleaned.trim().is_empty() {
             continue;
         }
-        // Filter out periodic background thread sweep logs to keep the visual screen clean!
+        // Filter out periodic background thread sweep logs.
+        // IMPORTANT: we must NOT set TTY_LOGS_CHANGED for these filtered messages or the
+        // TTY will flicker every time a background thread fires (every ~2 seconds).
         if cleaned.contains("[THREAD 1]") || cleaned.contains("[THREAD 2]") {
             continue;
         }
-        logs.push(cleaned);
+        tty_logs.push(cleaned);
+        appended = true;
     }
-    // Limit to the last 8 lines (fits in our visual log box)
-    while logs.len() > 8 {
-        logs.remove(0);
+    // Limit TTY scrollback logs to 250 lines
+    while tty_logs.len() > 250 {
+        tty_logs.remove(0);
+    }
+    // Only signal a TTY redraw when a line was actually added
+    if appended {
+        TTY_LOGS_CHANGED.store(true, Ordering::Release);
     }
 }
+
 
 /// A simple, safe spinlock implementation for bare-metal concurrency control.
 pub struct Spinlock<T> {
@@ -192,8 +217,9 @@ pub fn _print(args: fmt::Arguments) {
     if ALLOCATOR_READY.load(Ordering::Acquire) {
         let mut msg = alloc::string::String::new();
         let _ = core::fmt::write(&mut msg, args);
+        // Feed TTY scrollback buffer. LOGS_CHANGED no longer drives any render path
+        // because the dashboard now uses a static info panel instead of rolling logs.
         append_log(&msg);
-        LOGS_CHANGED.store(true, Ordering::Release);
     }
 }
 
@@ -360,7 +386,11 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     let mut last_rendered_ticks = 0;
     let mut last_rendered_len = 0;
 
-    print!("rustanium> ");
+    // Unix shell state: current working directory and command history
+    let mut cwd = String::from("/");
+    let mut cmd_history: Vec<String> = Vec::new();
+
+    print!("rustanium:{}> ", cwd);
 
     loop {
         // A. Dynamic steady tick generator (simulates a steady 50Hz hardware clock)
@@ -393,41 +423,128 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
                     println!();
                     let trimmed = line_buffer.trim();
                     if !trimmed.is_empty() {
-                        handle_command(trimmed, &mut core);
+                        // Push to history before executing
+                        cmd_history.push(String::from(trimmed));
+                        if cmd_history.len() > 50 {
+                            cmd_history.remove(0);
+                        }
+                        handle_command(trimmed, &mut core, &mut cwd, &cmd_history);
                     }
                     line_buffer.clear();
-                    print!("rustanium> ");
+                    print!("rustanium:{}> ", cwd);
+
+                    // Update TTY prompt immediately if active!
+                    if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                        if *CURRENT_SCREEN_MODE.lock() == ScreenMode::Tty {
+                            graphics.update_tty_prompt(&line_buffer, &cwd);
+                        }
+                    }
+                }
+                KeyboardInput::F1 => {
+                    // Switch to TTY Console Mode
+                    let mut mode = CURRENT_SCREEN_MODE.lock();
+                    if *mode != ScreenMode::Tty {
+                        *mode = ScreenMode::Tty;
+                        *TTY_SCROLL_OFFSET.lock() = 0;
+                        if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                            let tty_logs = TTY_LOGS.lock().clone();
+                            graphics.draw_tty_layout(current_ticks, &tty_logs, 0, &line_buffer, &cwd);
+                        }
+                        last_rendered_ticks = current_ticks;
+                        last_rendered_len = line_buffer.len();
+                    }
+                }
+                KeyboardInput::F2 => {
+                    // Switch to Dashboard Mode
+                    let mut mode = CURRENT_SCREEN_MODE.lock();
+                    if *mode != ScreenMode::Dashboard {
+                        *mode = ScreenMode::Dashboard;
+                        if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                            graphics.draw_dashboard_layout(current_ticks, &[]);
+                        }
+                        last_rendered_ticks = current_ticks;
+                        last_rendered_len = line_buffer.len();
+                    }
+                }
+                KeyboardInput::PageUp => {
+                    let current_mode = *CURRENT_SCREEN_MODE.lock();
+                    if current_mode == ScreenMode::Tty {
+                        let total_len = TTY_LOGS.lock().len();
+                        let mut offset = TTY_SCROLL_OFFSET.lock();
+                        // Max scrollback: total_len - visible_lines (22)
+                        let max_scroll = if total_len > 22 { total_len - 22 } else { 0 };
+                        if *offset < max_scroll {
+                            *offset = core::cmp::min(max_scroll, *offset + 3);
+                            TTY_LOGS_CHANGED.store(true, Ordering::Release);
+                        }
+                    }
+                }
+                KeyboardInput::PageDown => {
+                    let current_mode = *CURRENT_SCREEN_MODE.lock();
+                    if current_mode == ScreenMode::Tty {
+                        let mut offset = TTY_SCROLL_OFFSET.lock();
+                        if *offset > 0 {
+                            *offset = if *offset > 3 { *offset - 3 } else { 0 };
+                            TTY_LOGS_CHANGED.store(true, Ordering::Release);
+                        }
+                    }
                 }
             }
         }
 
-        // Optimized dynamic rendering: Only update changed elements (completely flicker-free!)
-        let current_len = line_buffer.len();
-        if current_ticks != last_rendered_ticks {
-            if let Some(ref mut graphics) = *GRAPHICS.lock() {
-                graphics.update_dashboard_telemetry(current_ticks);
+        // --- RENDERING ORCHESTRATION ---
+        let current_mode = *CURRENT_SCREEN_MODE.lock();
+        match current_mode {
+            ScreenMode::Dashboard => {
+                let current_len = line_buffer.len();
+                if current_ticks != last_rendered_ticks {
+                    if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                        graphics.update_dashboard_telemetry(current_ticks);
+                    }
+                    last_rendered_ticks = current_ticks;
+                }
+                if current_len != last_rendered_len {
+                    if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                        let mut prompt_buf = String::new();
+                        prompt_buf.push_str("rustanium:");
+                        prompt_buf.push_str(&cwd);
+                        prompt_buf.push_str("> ");
+                        prompt_buf.push_str(&line_buffer);
+                        graphics.update_keyboard_prompt(&prompt_buf);
+                    }
+                    last_rendered_len = current_len;
+                }
+                // Dashboard log panel removed — static info is drawn once on layout init.
             }
-            last_rendered_ticks = current_ticks;
-        }
-        if current_len != last_rendered_len {
-            if let Some(ref mut graphics) = *GRAPHICS.lock() {
-                let mut prompt_buf = String::new();
-                prompt_buf.push_str("rustanium> ");
-                prompt_buf.push_str(&line_buffer);
-                graphics.update_keyboard_prompt(&prompt_buf);
-            }
-            last_rendered_len = current_len;
-        }
-        if LOGS_CHANGED.swap(false, Ordering::Acquire) {
-            if let Some(ref mut graphics) = *GRAPHICS.lock() {
-                let logs = SYSTEM_LOGS.lock().clone();
-                graphics.update_dashboard_logs(&logs);
+            ScreenMode::Tty => {
+                let current_len = line_buffer.len();
+                let logs_changed = TTY_LOGS_CHANGED.swap(false, Ordering::Acquire);
+                
+                if let Some(ref mut graphics) = *GRAPHICS.lock() {
+                    // 1. Update ticks/progress bar on every tick (completely flicker-free!)
+                    if current_ticks != last_rendered_ticks {
+                        graphics.update_tty_telemetry(current_ticks);
+                        last_rendered_ticks = current_ticks;
+                    }
+                    // 2. Update active input prompt line only when buffer length changes
+                    if current_len != last_rendered_len {
+                        graphics.update_tty_prompt(&line_buffer, &cwd);
+                        last_rendered_len = current_len;
+                    }
+                    // 3. Update logs panel and scrollbar only when logs change (new log line or scroll event)
+                    if logs_changed {
+                        let tty_logs = TTY_LOGS.lock().clone();
+                        let scroll = *TTY_SCROLL_OFFSET.lock();
+                        graphics.update_tty_logs(&tty_logs, scroll);
+                    }
+                }
             }
         }
 
         // D. Yield CPU to let other background threads run cooperatively
         scheduler::SCHEDULER.lock().thread_yield();
     }
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -435,6 +552,10 @@ pub enum KeyboardInput {
     Char(char),
     Backspace,
     Enter,
+    F1,
+    F2,
+    PageUp,
+    PageDown,
 }
 
 pub struct KeyboardState {
@@ -462,6 +583,14 @@ impl KeyboardState {
             0x0E => Some(KeyboardInput::Backspace),
             // Enter
             0x1C => Some(KeyboardInput::Enter),
+            // F1 Pressed
+            0x3B => Some(KeyboardInput::F1),
+            // F2 Pressed
+            0x3C => Some(KeyboardInput::F2),
+            // Page Up Pressed
+            0x49 => Some(KeyboardInput::PageUp),
+            // Page Down Pressed
+            0x51 => Some(KeyboardInput::PageDown),
             // Standard scan codes
             code => {
                 // Ignore key releases (scan code set 1 sets bit 7)
@@ -478,6 +607,7 @@ impl KeyboardState {
         }
     }
 }
+
 
 fn translate_scancode(scancode: u8, shift: bool) -> Option<char> {
     let char_map = match scancode {
@@ -573,7 +703,7 @@ fn print_vfs_tree(vfs: &virtual_fs::VirtualFileSystem, inode_idx: usize, indent:
     }
 }
 
-fn handle_command(cmd_line: &str, core: &mut kernel_core::SystemCore) {
+fn handle_command(cmd_line: &str, core: &mut kernel_core::SystemCore, cwd: &mut String, history: &[String]) {
     let mut parts = cmd_line.split_whitespace();
     let cmd = match parts.next() {
         Some(c) => c,
@@ -586,14 +716,35 @@ fn handle_command(cmd_line: &str, core: &mut kernel_core::SystemCore) {
             println!("============================================================");
             println!("         AE RUSTANIUM BARE-METAL INTERACTIVE SHELL          ");
             println!("============================================================");
-            println!("Available Commands:");
-            println!("  help             - Show this diagnostic helper menu");
-            println!("  status           - View microkernel status & physical memory metrics");
-            println!("  tasks            - List running processes and scheduler info");
-            println!("  inject-flip      - Simulates hardware radiation bit flip");
-            println!("  vfs              - Recursive visualization of Virtual File System");
-            println!("  cat <path>       - Display content of a file (e.g. /system/kernel.conf)");
-            println!("  clear            - Reset the console terminal");
+            println!("File System:");
+            println!("  ls [path]        - List directory contents");
+            println!("  pwd              - Print current working directory");
+            println!("  cd <path>        - Change working directory (.. supported)");
+            println!("  mkdir <path>     - Create a new directory");
+            println!("  touch <path>     - Create an empty file");
+            println!("  write <p> <txt>  - Write text into a file");
+            println!("  cat <path>       - Display file content");
+            println!("  head [-n] <path> - Show first N lines of a file (default 10)");
+            println!("  tail [-n] <path> - Show last N lines of a file (default 10)");
+            println!("  wc <path>        - Count lines, words, bytes in file");
+            println!("  cp <src> <dst>   - Copy a file to a new location");
+            println!("  mv <src> <dst>   - Move / rename a file or directory");
+            println!("  rm [-rf] <path>  - Remove file or directory recursively");
+            println!("  find <name>      - Search VFS tree for a name");
+            println!("  vfs              - Print the full VFS tree");
+            println!("System:");
+            println!("  echo <text>      - Print text to the console");
+            println!("  uname            - Print kernel and hardware identity");
+            println!("  uptime           - Show system uptime in ticks and seconds");
+            println!("  free             - Show heap and page allocator memory usage");
+            println!("  whoami           - Print current user identity");
+            println!("  hostname         - Print the system hostname");
+            println!("  history          - List previously executed commands");
+            println!("  status           - Microkernel health & memory metrics");
+            println!("  tasks            - List running microservices");
+            println!("  inject-flip      - Inject synthetic radiation bit flip");
+            println!("  clear            - Clear the console screen");
+            println!("  help             - Show this help menu");
             println!("============================================================");
         }
         "status" => {
@@ -667,17 +818,128 @@ fn handle_command(cmd_line: &str, core: &mut kernel_core::SystemCore) {
             print_vfs_tree(&core.vfs, 0, 0);
             println!("------------------------------------------------------------");
         }
+        "ls" => {
+            // Default to cwd when no argument given
+            let path = if args.is_empty() {
+                cwd.as_str()
+            } else {
+                args[0]
+            };
+            let resolved = resolve_relative_path(cwd, path);
+            match core.vfs.resolve_path(&resolved) {
+                Ok(idx) => {
+                    let inode = &core.vfs.inodes[idx];
+                    match &inode.inode_type {
+                        virtual_fs::InodeType::Directory { entries } => {
+                            println!("{}:", resolved);
+                            if entries.is_empty() {
+                                println!("  (directory is empty)");
+                            }
+                            for (name, child_idx) in entries {
+                                let child = &core.vfs.inodes[*child_idx];
+                                if child.is_directory() {
+                                    println!("  \x1B[38;5;33m{}/\x1B[0m", name);
+                                } else {
+                                    println!("  {}", name);
+                                }
+                            }
+                        }
+                        virtual_fs::InodeType::File { size, .. } => {
+                            println!("{} (file, {} bytes)", inode.name, size);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("\x1B[38;5;196m[VFS ERR] Path resolve failed: {}\x1B[0m", e);
+                }
+            }
+        }
+        "mkdir" => {
+            if args.is_empty() {
+                println!("\x1B[38;5;196mUsage: mkdir <path>\x1B[0m");
+                return;
+            }
+            let full_path = resolve_relative_path(cwd, args[0]);
+            let (parent_path, name) = split_parent_child(&full_path);
+            match core.vfs.mkdir(&parent_path, &name) {
+                Ok(_) => {
+                    println!("[VFS] Created directory: {}", full_path);
+                }
+                Err(e) => {
+                    println!("\x1B[38;5;196m[VFS ERR] mkdir failed: {}\x1B[0m", e);
+                }
+            }
+        }
+        "touch" => {
+            if args.is_empty() {
+                println!("\x1B[38;5;196mUsage: touch <path>\x1B[0m");
+                return;
+            }
+            let full_path = resolve_relative_path(cwd, args[0]);
+            let (parent_path, name) = split_parent_child(&full_path);
+            match core.vfs.create_file(&parent_path, &name) {
+                Ok(_) => {
+                    println!("[VFS] Created file: {}", full_path);
+                }
+                Err(e) => {
+                    println!("\x1B[38;5;196m[VFS ERR] touch failed: {}\x1B[0m", e);
+                }
+            }
+        }
+        "write" => {
+            if args.len() < 2 {
+                println!("\x1B[38;5;196mUsage: write <path> <text_content...>\x1B[0m");
+                return;
+            }
+            let file_path = resolve_relative_path(cwd, args[0]);
+            let text_content = args[1..].join(" ");
+            match core.vfs.write_file(&file_path, text_content.as_bytes(), &mut core.allocator, 1000) {
+                Ok(_) => {
+                    println!("[VFS] Wrote {} bytes to file: {}", text_content.len(), file_path);
+                }
+                Err(e) => {
+                    println!("\x1B[38;5;196m[VFS ERR] write failed: {}\x1B[0m", e);
+                }
+            }
+        }
+        "rm" => {
+            if args.is_empty() {
+                println!("\x1B[38;5;196mUsage: rm [-rf] <path>\x1B[0m");
+                return;
+            }
+            let mut recursive = false;
+            let raw_path = if args[0] == "-rf" {
+                if args.len() < 2 {
+                    println!("\x1B[38;5;196mUsage: rm -rf <path>\x1B[0m");
+                    return;
+                }
+                recursive = true;
+                args[1]
+            } else {
+                args[0]
+            };
+            let path = resolve_relative_path(cwd, raw_path);
+            match core.vfs.remove_node(&path, recursive, &mut core.allocator) {
+                Ok(_) => {
+                    println!("[VFS] Removed node: {}", path);
+                }
+                Err(e) => {
+                    println!("\x1B[38;5;196m[VFS ERR] remove failed: {}\x1B[0m", e);
+                }
+            }
+        }
         "cat" => {
             if args.is_empty() {
                 println!("\x1B[38;5;196mUsage: cat <file_path>\x1B[0m");
                 return;
             }
-            let file_path = args[0];
-            match core.vfs.read_file(file_path, &mut core.allocator) {
+            let file_path = resolve_relative_path(cwd, args[0]);
+            match core.vfs.read_file(&file_path, &mut core.allocator) {
                 Ok(data) => {
-                    println!("--- Reading {} ---", file_path);
+                    println!("--- {} ---", file_path);
                     if let Ok(text) = core::str::from_utf8(&data) {
                         print!("{}", text);
+                        if !text.ends_with('\n') { println!(); }
                     } else {
                         // Hex dump for binary contents
                         for chunk in data.chunks(16) {
@@ -694,6 +956,207 @@ fn handle_command(cmd_line: &str, core: &mut kernel_core::SystemCore) {
                 }
             }
         }
+        // ── pwd ─────────────────────────────────────────────────────────
+        "pwd" => {
+            println!("{}", cwd);
+        }
+
+        // ── cd ──────────────────────────────────────────────────────────
+        "cd" => {
+            let target = if args.is_empty() { "/" } else { args[0] };
+            let new_path = resolve_relative_path(cwd, target);
+            // Validate that the path exists and is a directory
+            match core.vfs.resolve_path(&new_path) {
+                Ok(idx) => {
+                    if core.vfs.inodes[idx].is_directory() {
+                        *cwd = new_path;
+                    } else {
+                        println!("\x1B[38;5;196mcd: '{}' is not a directory\x1B[0m", target);
+                    }
+                }
+                Err(_) => {
+                    println!("\x1B[38;5;196mcd: '{}': No such file or directory\x1B[0m", target);
+                }
+            }
+        }
+
+        // ── echo ─────────────────────────────────────────────────────────
+        "echo" => {
+            println!("{}", args.join(" "));
+        }
+
+        // ── cp ───────────────────────────────────────────────────────────
+        "cp" => {
+            if args.len() < 2 {
+                println!("\x1B[38;5;196mUsage: cp <src> <dst>\x1B[0m");
+                return;
+            }
+            let src = resolve_relative_path(cwd, args[0]);
+            let (dst_parent, dst_name) = split_parent_child(args[1]);
+            match core.vfs.copy_file(&src, &dst_parent, &dst_name, &mut core.allocator, 1000) {
+                Ok(_) => println!("[VFS] Copied '{}' -> '{}'", src, args[1]),
+                Err(e) => println!("\x1B[38;5;196m[VFS ERR] cp failed: {}\x1B[0m", e),
+            }
+        }
+
+        // ── mv ───────────────────────────────────────────────────────────
+        "mv" => {
+            if args.len() < 2 {
+                println!("\x1B[38;5;196mUsage: mv <src> <dst>\x1B[0m");
+                return;
+            }
+            let src = resolve_relative_path(cwd, args[0]);
+            let (dst_parent, dst_name) = split_parent_child(args[1]);
+            match core.vfs.rename_node(&src, &dst_parent, &dst_name) {
+                Ok(_) => println!("[VFS] Moved '{}' -> '{}'", src, args[1]),
+                Err(e) => println!("\x1B[38;5;196m[VFS ERR] mv failed: {}\x1B[0m", e),
+            }
+        }
+
+        // ── uname ────────────────────────────────────────────────────────
+        "uname" => {
+            println!("AE-RUSTANIUM 0.1.0 bare-metal x86_64 UEFI/BIOS");
+            println!("Kernel: no_std Rust microkernel (nightly)");
+            println!("Arch:   x86_64  |  CPU: AMD/Intel 64-bit");
+            println!("Boot:   UEFI GOP + Legacy BIOS MBR");
+        }
+
+        // ── uptime ───────────────────────────────────────────────────────
+        "uptime" => {
+            let ticks = SYSTEM_TICKS.load(Ordering::Relaxed);
+            // Each tick loop runs ~20 000 spin loops; roughly 1 tick ≈ 20 ms at stock speed
+            let secs_approx = ticks / 50;
+            println!("Uptime: {} ticks  (~{} seconds)", ticks, secs_approx);
+            println!("Load:   cooperative round-robin scheduler — 3 threads active");
+        }
+
+        // ── free ─────────────────────────────────────────────────────────
+        "free" => {
+            let total_pages = core.allocator.allocation_map.len();
+            let used_pages = core.allocator.allocation_map.iter().filter(|p| p.is_some()).count();
+            let free_pages = total_pages - used_pages;
+            // Count quarantined pages by checking allocation_map slots that have no PID
+            // but whose frame status indicates they are not usable (frames are inspected indirectly
+            // via the allocator's internal quarantine tracking: any frame with no pid and previously
+            // used is effectively quarantined.  We expose just the aggregate counts instead.)
+            println!("------------------------------------------------------------");
+            println!("MEMORY USAGE (Page Allocator)");
+            println!("------------------------------------------------------------");
+            println!("Total  pages : {}", total_pages);
+            println!("Used   pages : {}", used_pages);
+            println!("Free   pages : {}", free_pages);
+            println!("Page size    : 64 bytes (SECDED Hamming blocks)");
+            println!("Heap         : 1 MB LockedHeap (linked-list allocator)");
+            println!("------------------------------------------------------------");
+        }
+
+        // ── whoami ───────────────────────────────────────────────────────
+        "whoami" => {
+            println!("root");
+        }
+
+        // ── hostname ─────────────────────────────────────────────────────
+        "hostname" => {
+            println!("rustanium");
+        }
+
+        // ── history ──────────────────────────────────────────────────────
+        "history" => {
+            if history.is_empty() {
+                println!("(no command history yet)");
+            } else {
+                for (i, entry) in history.iter().enumerate() {
+                    println!("{:>4}  {}", i + 1, entry);
+                }
+            }
+        }
+
+        // ── head ─────────────────────────────────────────────────────────
+        "head" => {
+            // head [-n <count>] <path>
+            let (n, path) = parse_n_flag(&args, 10);
+            let path = match path {
+                Some(p) => resolve_relative_path(cwd, p),
+                None => { println!("\x1B[38;5;196mUsage: head [-n <count>] <path>\x1B[0m"); return; }
+            };
+            match core.vfs.read_file(&path, &mut core.allocator) {
+                Ok(data) => {
+                    if let Ok(text) = core::str::from_utf8(&data) {
+                        for (i, line) in text.lines().enumerate() {
+                            if i >= n { break; }
+                            println!("{}", line);
+                        }
+                    } else {
+                        println!("(binary file — {} bytes)", data.len());
+                    }
+                }
+                Err(e) => println!("\x1B[38;5;196m[VFS ERR] head: {}\x1B[0m", e),
+            }
+        }
+
+        // ── tail ─────────────────────────────────────────────────────────
+        "tail" => {
+            let (n, path) = parse_n_flag(&args, 10);
+            let path = match path {
+                Some(p) => resolve_relative_path(cwd, p),
+                None => { println!("\x1B[38;5;196mUsage: tail [-n <count>] <path>\x1B[0m"); return; }
+            };
+            match core.vfs.read_file(&path, &mut core.allocator) {
+                Ok(data) => {
+                    if let Ok(text) = core::str::from_utf8(&data) {
+                        let all_lines: Vec<&str> = text.lines().collect();
+                        let start = if all_lines.len() > n { all_lines.len() - n } else { 0 };
+                        for line in &all_lines[start..] {
+                            println!("{}", line);
+                        }
+                    } else {
+                        println!("(binary file — {} bytes)", data.len());
+                    }
+                }
+                Err(e) => println!("\x1B[38;5;196m[VFS ERR] tail: {}\x1B[0m", e),
+            }
+        }
+
+        // ── wc ───────────────────────────────────────────────────────────
+        "wc" => {
+            if args.is_empty() {
+                println!("\x1B[38;5;196mUsage: wc <path>\x1B[0m");
+                return;
+            }
+            let path = resolve_relative_path(cwd, args[0]);
+            match core.vfs.read_file(&path, &mut core.allocator) {
+                Ok(data) => {
+                    let bytes = data.len();
+                    if let Ok(text) = core::str::from_utf8(&data) {
+                        let lines = text.lines().count();
+                        let words = text.split_whitespace().count();
+                        println!("  lines: {}  words: {}  bytes: {}  {}", lines, words, bytes, path);
+                    } else {
+                        println!("  (binary)  bytes: {}  {}", bytes, path);
+                    }
+                }
+                Err(e) => println!("\x1B[38;5;196m[VFS ERR] wc: {}\x1B[0m", e),
+            }
+        }
+
+        // ── find ─────────────────────────────────────────────────────────
+        "find" => {
+            if args.is_empty() {
+                println!("\x1B[38;5;196mUsage: find <name>\x1B[0m");
+                return;
+            }
+            let query = args[0];
+            let mut results: Vec<String> = Vec::new();
+            find_in_vfs(&core.vfs, 0, "/", query, &mut results);
+            if results.is_empty() {
+                println!("(no match found for '{}')", query);
+            } else {
+                for r in &results {
+                    println!("{}", r);
+                }
+            }
+        }
+
         "clear" => {
             // ANSI escape sequence to clear terminal screen and move cursor to home position
             print!("\x1B[2J\x1B[H");
@@ -701,6 +1164,101 @@ fn handle_command(cmd_line: &str, core: &mut kernel_core::SystemCore) {
         other => {
             println!("\x1B[38;5;196mUnknown command: '{}'. Type 'help' for options.\x1B[0m", other);
         }
+    }
+}
+
+/// Resolves a path relative to the given current working directory.
+///
+/// Handles absolute paths (starting with '/'), '.', '..', and relative segments.
+fn resolve_relative_path(cwd: &str, path: &str) -> alloc::string::String {
+    if path.starts_with('/') {
+        // Already absolute — normalise and return
+        return normalize_path(path);
+    }
+
+    // Build from cwd and append relative segments
+    let base = if cwd.ends_with('/') {
+        alloc::format!("{}{}", cwd, path)
+    } else {
+        alloc::format!("{}/{}", cwd, path)
+    };
+
+    normalize_path(&base)
+}
+
+/// Collapses '.' and '..' segments in an absolute path string.
+fn normalize_path(path: &str) -> alloc::string::String {
+    let mut stack: Vec<&str> = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}               // skip empty and current-dir markers
+            ".." => { stack.pop(); }    // go up one level
+            s => stack.push(s),
+        }
+    }
+    if stack.is_empty() {
+        alloc::string::String::from("/")
+    } else {
+        let mut out = alloc::string::String::new();
+        for s in &stack {
+            out.push('/');
+            out.push_str(s);
+        }
+        out
+    }
+}
+
+/// Parses an optional `-n <count>` flag from the beginning of an args slice.
+///
+/// Returns `(count, remaining_first_arg)`.
+fn parse_n_flag<'a>(args: &'a [&str], default: usize) -> (usize, Option<&'a str>) {
+    if args.len() >= 2 && args[0] == "-n" {
+        let n = args[1].parse::<usize>().unwrap_or(default);
+        (n, args.get(2).copied())
+    } else {
+        (default, args.first().copied())
+    }
+}
+
+/// Recursively walks the VFS tree from `inode_idx` and collects full paths whose
+/// name contains `query` (case-sensitive substring match).
+fn find_in_vfs(
+    vfs: &virtual_fs::VirtualFileSystem,
+    inode_idx: usize,
+    current_path: &str,
+    query: &str,
+    results: &mut Vec<alloc::string::String>,
+) {
+    if inode_idx >= vfs.inodes.len() {
+        return;
+    }
+    let inode = &vfs.inodes[inode_idx];
+    // Check if this node's name matches (skip root "")
+    if !inode.name.is_empty() && inode.name.contains(query) {
+        results.push(alloc::string::String::from(current_path));
+    }
+    // Recurse into directories
+    if let virtual_fs::InodeType::Directory { entries } = &inode.inode_type {
+        for (name, child_idx) in entries {
+            let child_path = if current_path == "/" {
+                alloc::format!("/{}", name)
+            } else {
+                alloc::format!("{}/{}", current_path, name)
+            };
+            find_in_vfs(vfs, *child_idx, &child_path, query, results);
+        }
+    }
+}
+
+fn split_parent_child(path: &str) -> (alloc::string::String, alloc::string::String) {
+    let path = path.trim_end_matches('/');
+    if let Some(pos) = path.rfind('/') {
+        let parent = &path[..pos];
+        let parent = if parent.is_empty() { "/" } else { parent };
+        let child = &path[pos + 1..];
+        (alloc::string::String::from(parent), alloc::string::String::from(child))
+    } else {
+        (alloc::string::String::from("/"), alloc::string::String::from(path))
     }
 }
 
