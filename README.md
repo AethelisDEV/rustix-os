@@ -1,10 +1,10 @@
-# 🌟 AE Rustanium: Safe, Fault-Tolerant & Self-Healing Microkernel Simulation
+# 🌟 AE Rustanium: Safe, Fault-Tolerant & Self-Healing Bare-Metal Operating System
 
 [![Rust](https://img.shields.io/badge/rust-stable%20%2F%20nightly-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Safety](https://img.shields.io/badge/safety-Safe%20Core%20%2F%20Bare--metal%20Unsafe-success.svg)](#safety--architecture-principles)
 
-**AE Rustanium** is a custom, microkernel-inspired operating system and simulation environment designed specifically to handle **hardware bit-flips, silent data corruption, and cosmic radiation**. It combines high-reliability **Safe Rust core abstractions** for host-side simulation with an **experimental bare-metal x86-64 target** that safely manages low-level hardware interactions.
+**AE Rustanium** is a custom, microkernel-inspired bare-metal operating system designed specifically to handle **hardware bit-flips, silent data corruption, and cosmic radiation**. It combines high-reliability **Safe Rust core abstractions** for host-side simulation with a **production-ready bare-metal x86-64 target** that boots natively and safely manages low-level hardware interactions.
 
 Built for environments susceptible to Single Event Upsets (SEUs) such as aerospace, deep space missions, high-altitude aviation, or edge nodes lacking hardware ECC RAM, AE Rustanium dynamically turns standard virtual pages into adaptive self-healing structures.
 
