@@ -302,6 +302,7 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     // Draw initial aesthetic dashboard visual
     if let Some(ref mut graphics) = *GRAPHICS.lock() {
         graphics.draw_dashboard_layout(0, &[]);
+        graphics.update_keyboard_prompt("rustanium:/> ");
     }
 
     // 2. Enable SSE and configure 8259 PIC + IDT interrupts
@@ -390,7 +391,11 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     let mut cwd = String::from("/");
     let mut cmd_history: Vec<String> = Vec::new();
 
-    print!("rustanium:{}> ", cwd);
+    // Write initial prompt directly to serial port bypassing the TTY scrollback logs
+    {
+        use core::fmt::Write;
+        let _ = write!(SERIAL_WRITER.lock(), "rustanium:{}> ", cwd);
+    }
 
     loop {
         // A. Dynamic steady tick generator (simulates a steady 50Hz hardware clock)
@@ -410,17 +415,35 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
             match in_val {
                 KeyboardInput::Char(c) => {
                     line_buffer.push(c);
-                    print!("{}", c);
+                    // Echo character directly to serial writer, bypassing print! / TTY_LOGS
+                    {
+                        let mut writer = SERIAL_WRITER.lock();
+                        writer.write_byte(c as u8);
+                    }
                 }
                 KeyboardInput::Backspace => {
                     if !line_buffer.is_empty() {
                         line_buffer.pop();
-                        // Send ANSI backspace erasure sequence: backspace, space, backspace
-                        print!("\x08 \x08");
+                        // Send ANSI backspace sequence directly to serial writer, bypassing print! / TTY_LOGS
+                        {
+                            let mut writer = SERIAL_WRITER.lock();
+                            writer.write_byte(0x08);
+                            writer.write_byte(b' ');
+                            writer.write_byte(0x08);
+                        }
                     }
                 }
                 KeyboardInput::Enter => {
-                    println!();
+                    // Send newline directly to serial writer, bypassing println! / TTY_LOGS
+                    {
+                        use core::fmt::Write;
+                        let _ = SERIAL_WRITER.lock().write_str("\r\n");
+                    }
+
+                    // Push command line to TTY scrollback logs so it is visible in the console
+                    let log_line = alloc::format!("rustanium:{}> {}", cwd, line_buffer);
+                    append_log(&log_line);
+
                     let trimmed = line_buffer.trim();
                     if !trimmed.is_empty() {
                         // Push to history before executing
@@ -431,7 +454,12 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
                         handle_command(trimmed, &mut core, &mut cwd, &cmd_history);
                     }
                     line_buffer.clear();
-                    print!("rustanium:{}> ", cwd);
+
+                    // Print prompt directly to serial writer, bypassing print! / TTY_LOGS
+                    {
+                        use core::fmt::Write;
+                        let _ = write!(SERIAL_WRITER.lock(), "rustanium:{}> ", cwd);
+                    }
 
                     // Update TTY prompt immediately if active!
                     if let Some(ref mut graphics) = *GRAPHICS.lock() {
@@ -461,6 +489,13 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
                         *mode = ScreenMode::Dashboard;
                         if let Some(ref mut graphics) = *GRAPHICS.lock() {
                             graphics.draw_dashboard_layout(current_ticks, &[]);
+
+                            let mut prompt_buf = String::new();
+                            prompt_buf.push_str("rustanium:");
+                            prompt_buf.push_str(&cwd);
+                            prompt_buf.push_str("> ");
+                            prompt_buf.push_str(&line_buffer);
+                            graphics.update_keyboard_prompt(&prompt_buf);
                         }
                         last_rendered_ticks = current_ticks;
                         last_rendered_len = line_buffer.len();
