@@ -211,9 +211,9 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 /// Static buffer holding keyboard inputs received asynchronously.
-pub static mut KEYBOARD_BUFFER: Option<crate::KeyboardInput> = None;
+pub static mut KEYBOARD_BUFFER: Option<crate::keyboard::KeyboardInput> = None;
 /// Static manager tracking shifting states for keyboard decoding.
-pub static mut KEYBOARD_STATE: crate::KeyboardState = crate::KeyboardState::new();
+pub static mut KEYBOARD_STATE: crate::keyboard::KeyboardState = crate::keyboard::KeyboardState::new();
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     unsafe {
