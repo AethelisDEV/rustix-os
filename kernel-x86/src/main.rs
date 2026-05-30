@@ -211,15 +211,21 @@ macro_rules! println {
 
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
-    let mut writer = SerialPort::new(0x3F8);
-    let _ = writer.write_fmt(args);
-
     if ALLOCATOR_READY.load(Ordering::Acquire) {
         let mut msg = alloc::string::String::new();
         let _ = core::fmt::write(&mut msg, args);
-        // Feed TTY scrollback buffer. LOGS_CHANGED no longer drives any render path
-        // because the dashboard now uses a static info panel instead of rolling logs.
+
+        // Filter out thread logs from both the serial port and TTY logs
+        if msg.contains("[THREAD 1]") || msg.contains("[THREAD 2]") {
+            return;
+        }
+
+        let mut writer = SerialPort::new(0x3F8);
+        let _ = writer.write_str(&msg);
         append_log(&msg);
+    } else {
+        let mut writer = SerialPort::new(0x3F8);
+        let _ = writer.write_fmt(args);
     }
 }
 
@@ -593,13 +599,27 @@ pub enum KeyboardInput {
     PageDown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardLayout {
+    Us,
+    Trq,
+}
+
 pub struct KeyboardState {
     shift_pressed: bool,
+    layout: KeyboardLayout,
 }
 
 impl KeyboardState {
     pub const fn new() -> Self {
-        Self { shift_pressed: false }
+        Self { 
+            shift_pressed: false,
+            layout: KeyboardLayout::Us,
+        }
+    }
+
+    pub fn set_layout(&mut self, layout: KeyboardLayout) {
+        self.layout = layout;
     }
 
     pub fn handle_scancode(&mut self, scancode: u8) -> Option<KeyboardInput> {
@@ -630,7 +650,7 @@ impl KeyboardState {
             code => {
                 // Ignore key releases (scan code set 1 sets bit 7)
                 if code & 0x80 == 0 {
-                    if let Some(c) = translate_scancode(code, self.shift_pressed) {
+                    if let Some(c) = translate_scancode(code, self.shift_pressed, self.layout) {
                         Some(KeyboardInput::Char(c))
                     } else {
                         None
@@ -644,57 +664,114 @@ impl KeyboardState {
 }
 
 
-fn translate_scancode(scancode: u8, shift: bool) -> Option<char> {
-    let char_map = match scancode {
-        0x02 => if shift { '!' } else { '1' },
-        0x03 => if shift { '@' } else { '2' },
-        0x04 => if shift { '#' } else { '3' },
-        0x05 => if shift { '$' } else { '4' },
-        0x06 => if shift { '%' } else { '5' },
-        0x07 => if shift { '^' } else { '6' },
-        0x08 => if shift { '&' } else { '7' },
-        0x09 => if shift { '*' } else { '8' },
-        0x0A => if shift { '(' } else { '9' },
-        0x0B => if shift { ')' } else { '0' },
-        0x0C => if shift { '_' } else { '-' },
-        0x0D => if shift { '+' } else { '=' },
-        0x10 => if shift { 'Q' } else { 'q' },
-        0x11 => if shift { 'W' } else { 'w' },
-        0x12 => if shift { 'E' } else { 'e' },
-        0x13 => if shift { 'R' } else { 'r' },
-        0x14 => if shift { 'T' } else { 't' },
-        0x15 => if shift { 'Y' } else { 'y' },
-        0x16 => if shift { 'U' } else { 'u' },
-        0x17 => if shift { 'I' } else { 'i' },
-        0x18 => if shift { 'O' } else { 'o' },
-        0x19 => if shift { 'P' } else { 'p' },
-        0x1A => if shift { '{' } else { '[' },
-        0x1B => if shift { '}' } else { ']' },
-        0x1E => if shift { 'A' } else { 'a' },
-        0x1F => if shift { 'S' } else { 's' },
-        0x20 => if shift { 'D' } else { 'd' },
-        0x21 => if shift { 'F' } else { 'f' },
-        0x22 => if shift { 'G' } else { 'g' },
-        0x23 => if shift { 'H' } else { 'h' },
-        0x24 => if shift { 'J' } else { 'j' },
-        0x25 => if shift { 'K' } else { 'k' },
-        0x26 => if shift { 'L' } else { 'l' },
-        0x27 => if shift { ':' } else { ';' },
-        0x28 => if shift { '"' } else { '\'' },
-        0x2C => if shift { 'Z' } else { 'z' },
-        0x2D => if shift { 'X' } else { 'x' },
-        0x2E => if shift { 'C' } else { 'c' },
-        0x2F => if shift { 'V' } else { 'v' },
-        0x30 => if shift { 'B' } else { 'b' },
-        0x31 => if shift { 'N' } else { 'n' },
-        0x32 => if shift { 'M' } else { 'm' },
-        0x33 => if shift { '<' } else { ',' },
-        0x34 => if shift { '>' } else { '.' },
-        0x35 => if shift { '?' } else { '/' },
-        0x39 => ' ', // Space
-        _ => return None,
-    };
-    Some(char_map)
+fn translate_scancode(scancode: u8, shift: bool, layout: KeyboardLayout) -> Option<char> {
+    match layout {
+        KeyboardLayout::Us => {
+            let char_map = match scancode {
+                0x02 => if shift { '!' } else { '1' },
+                0x03 => if shift { '@' } else { '2' },
+                0x04 => if shift { '#' } else { '3' },
+                0x05 => if shift { '$' } else { '4' },
+                0x06 => if shift { '%' } else { '5' },
+                0x07 => if shift { '^' } else { '6' },
+                0x08 => if shift { '&' } else { '7' },
+                0x09 => if shift { '*' } else { '8' },
+                0x0A => if shift { '(' } else { '9' },
+                0x0B => if shift { ')' } else { '0' },
+                0x0C => if shift { '_' } else { '-' },
+                0x0D => if shift { '+' } else { '=' },
+                0x10 => if shift { 'Q' } else { 'q' },
+                0x11 => if shift { 'W' } else { 'w' },
+                0x12 => if shift { 'E' } else { 'e' },
+                0x13 => if shift { 'R' } else { 'r' },
+                0x14 => if shift { 'T' } else { 't' },
+                0x15 => if shift { 'Y' } else { 'y' },
+                0x16 => if shift { 'U' } else { 'u' },
+                0x17 => if shift { 'I' } else { 'i' },
+                0x18 => if shift { 'O' } else { 'o' },
+                0x19 => if shift { 'P' } else { 'p' },
+                0x1A => if shift { '{' } else { '[' },
+                0x1B => if shift { '}' } else { ']' },
+                0x1E => if shift { 'A' } else { 'a' },
+                0x1F => if shift { 'S' } else { 's' },
+                0x20 => if shift { 'D' } else { 'd' },
+                0x21 => if shift { 'F' } else { 'f' },
+                0x22 => if shift { 'G' } else { 'g' },
+                0x23 => if shift { 'H' } else { 'h' },
+                0x24 => if shift { 'J' } else { 'j' },
+                0x25 => if shift { 'K' } else { 'k' },
+                0x26 => if shift { 'L' } else { 'l' },
+                0x27 => if shift { ':' } else { ';' },
+                0x28 => if shift { '"' } else { '\'' },
+                0x2C => if shift { 'Z' } else { 'z' },
+                0x2D => if shift { 'X' } else { 'x' },
+                0x2E => if shift { 'C' } else { 'c' },
+                0x2F => if shift { 'V' } else { 'v' },
+                0x30 => if shift { 'B' } else { 'b' },
+                0x31 => if shift { 'N' } else { 'n' },
+                0x32 => if shift { 'M' } else { 'm' },
+                0x33 => if shift { '<' } else { ',' },
+                0x34 => if shift { '>' } else { '.' },
+                0x35 => if shift { '?' } else { '/' },
+                0x39 => ' ', // Space
+                _ => return None,
+            };
+            Some(char_map)
+        }
+        KeyboardLayout::Trq => {
+            let char_map = match scancode {
+                0x02 => if shift { '!' } else { '1' },
+                0x03 => if shift { '\'' } else { '2' },
+                0x04 => if shift { '^' } else { '3' },
+                0x05 => if shift { '+' } else { '4' },
+                0x06 => if shift { '%' } else { '5' },
+                0x07 => if shift { '&' } else { '6' },
+                0x08 => if shift { '/' } else { '7' },
+                0x09 => if shift { '(' } else { '8' },
+                0x0A => if shift { ')' } else { '9' },
+                0x0B => if shift { '=' } else { '0' },
+                0x0C => if shift { '?' } else { '*' },
+                0x0D => if shift { '_' } else { '-' },
+                0x10 => if shift { 'Q' } else { 'q' },
+                0x11 => if shift { 'W' } else { 'w' },
+                0x12 => if shift { 'E' } else { 'e' },
+                0x13 => if shift { 'R' } else { 'r' },
+                0x14 => if shift { 'T' } else { 't' },
+                0x15 => if shift { 'Y' } else { 'y' },
+                0x16 => if shift { 'U' } else { 'u' },
+                0x17 => if shift { 'I' } else { 'ı' },
+                0x18 => if shift { 'O' } else { 'o' },
+                0x19 => if shift { 'P' } else { 'p' },
+                0x1A => if shift { 'Ğ' } else { 'ğ' },
+                0x1B => if shift { 'Ü' } else { 'ü' },
+                0x1E => if shift { 'A' } else { 'a' },
+                0x1F => if shift { 'S' } else { 's' },
+                0x20 => if shift { 'D' } else { 'd' },
+                0x21 => if shift { 'F' } else { 'f' },
+                0x22 => if shift { 'G' } else { 'g' },
+                0x23 => if shift { 'H' } else { 'h' },
+                0x24 => if shift { 'J' } else { 'j' },
+                0x25 => if shift { 'K' } else { 'k' },
+                0x26 => if shift { 'L' } else { 'l' },
+                0x27 => if shift { 'Ş' } else { 'ş' },
+                0x28 => if shift { 'İ' } else { 'i' },
+                0x2B => if shift { ';' } else { ',' },
+                0x2C => if shift { 'Z' } else { 'z' },
+                0x2D => if shift { 'X' } else { 'x' },
+                0x2E => if shift { 'C' } else { 'c' },
+                0x2F => if shift { 'V' } else { 'v' },
+                0x30 => if shift { 'B' } else { 'b' },
+                0x31 => if shift { 'N' } else { 'n' },
+                0x32 => if shift { 'M' } else { 'm' },
+                0x33 => if shift { 'Ö' } else { 'ö' },
+                0x34 => if shift { 'Ç' } else { 'ç' },
+                0x35 => if shift { ':' } else { '.' },
+                0x39 => ' ', // Space
+                _ => return None,
+            };
+            Some(char_map)
+        }
+    }
 }
 
 fn poll_serial() -> Option<KeyboardInput> {
@@ -775,12 +852,36 @@ fn handle_command(cmd_line: &str, core: &mut kernel_core::SystemCore, cwd: &mut 
             println!("  whoami           - Print current user identity");
             println!("  hostname         - Print the system hostname");
             println!("  history          - List previously executed commands");
+            println!("  loadkeys <lay>   - Switch keyboard layout (us, trq)");
             println!("  status           - Microkernel health & memory metrics");
             println!("  tasks            - List running microservices");
             println!("  inject-flip      - Inject synthetic radiation bit flip");
             println!("  clear            - Clear the console screen");
             println!("  help             - Show this help menu");
             println!("============================================================");
+        }
+        "loadkeys" => {
+            if args.is_empty() {
+                println!("Usage: loadkeys <layout> (e.g. us, trq)");
+                return;
+            }
+            match args[0] {
+                "us" => {
+                    unsafe {
+                        interrupts::KEYBOARD_STATE.set_layout(KeyboardLayout::Us);
+                    }
+                    println!("Keyboard layout switched to US.");
+                }
+                "trq" => {
+                    unsafe {
+                        interrupts::KEYBOARD_STATE.set_layout(KeyboardLayout::Trq);
+                    }
+                    println!("Keyboard layout switched to Turkish Q (TRQ).");
+                }
+                other => {
+                    println!("Unknown keyboard layout: '{}'. Supported: us, trq", other);
+                }
+            }
         }
         "status" => {
             println!("------------------------------------------------------------");
