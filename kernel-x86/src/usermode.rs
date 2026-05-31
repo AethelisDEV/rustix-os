@@ -47,6 +47,7 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     let pml4_entry_ptr = pml4_virt_ptr.add(usize::from(p4_idx));
     let mut pml4_entry = pml4_entry_ptr.read();
     pml4_entry |= 0x04; // Set USER_ACCESSIBLE bit (0x04)
+    pml4_entry &= !(1u64 << 63); // Clear NX (No-Execute) bit to allow user code execution
     pml4_entry_ptr.write(pml4_entry);
 
     let p3_phys = pml4_entry & 0x000F_FFFF_FFFF_F000;
@@ -56,6 +57,7 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     let p3_entry_ptr = p3_virt_ptr.add(usize::from(p3_idx));
     let mut p3_entry = p3_entry_ptr.read();
     p3_entry |= 0x04; // Set USER_ACCESSIBLE
+    p3_entry &= !(1u64 << 63); // Clear NX bit
     p3_entry_ptr.write(p3_entry);
 
     let p2_phys = p3_entry & 0x000F_FFFF_FFFF_F000;
@@ -65,6 +67,7 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     let p2_entry_ptr = p2_virt_ptr.add(usize::from(p2_idx));
     let mut p2_entry = p2_entry_ptr.read();
     p2_entry |= 0x04; // Set USER_ACCESSIBLE
+    p2_entry &= !(1u64 << 63); // Clear NX bit
     p2_entry_ptr.write(p2_entry);
 
     // If it's a huge 2MB page, no Level 1 page table exists
@@ -80,6 +83,7 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     let p1_entry_ptr = p1_virt_ptr.add(usize::from(p1_idx));
     let mut p1_entry = p1_entry_ptr.read();
     p1_entry |= 0x04; // Set USER_ACCESSIBLE
+    p1_entry &= !(1u64 << 63); // Clear NX bit
     p1_entry_ptr.write(p1_entry);
 
     // Invalidate TLB cache for this specific virtual address
