@@ -151,7 +151,13 @@ fn thread_diagnostics() {
     }
 }
 
-bootloader_api::entry_point!(kernel_main);
+const BOOTLOADER_CONFIG: bootloader_api::config::BootloaderConfig = {
+    let mut config = bootloader_api::config::BootloaderConfig::new_default();
+    config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
+    config
+};
+
+bootloader_api::entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 /// The absolute entry point of the bare-metal x86_64 operating system kernel.
 fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {

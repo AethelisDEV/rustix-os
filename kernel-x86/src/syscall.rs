@@ -97,6 +97,8 @@ core::arch::global_asm!(
     // Call our Rust handler safely
     "call rust_syscall_handler",
     // Now RAX contains the return value of our syscall handler
+    "cmp rax, 3",
+    "je syscall_exit_handler",
     // Restore saved registers
     "pop r10",
     "pop r9",
@@ -111,7 +113,21 @@ core::arch::global_asm!(
     // Restore User Stack Pointer (RSP)
     "mov rsp, [rip + USER_RSP]",
     // Return back to Ring 3 User Space!
-    "sysretq"
+    "sysretq",
+    "",
+    "syscall_exit_handler:",
+    // 1. Reload kernel data segment selectors to ensure stability in Ring 0
+    "mov ax, 0x10",
+    "mov ds, ax",
+    "mov es, ax",
+    // 2. Restore stack and base pointers to the state expected after calling enter_user_mode
+    "mov rsp, [rip + KERNEL_SHELL_RSP]",
+    "sub rsp, 8",
+    "mov rbp, [rip + KERNEL_SHELL_RBP]",
+    // 3. Re-enable interrupts since FMASK disabled them on syscall entry
+    "sti",
+    // 4. Return to the instruction following enter_user_mode inside demonstrate_user_mode
+    "ret"
 );
 
 // Declare the external assembly function so Rust can reference it
@@ -126,6 +142,7 @@ extern "C" {
 /// Supported Syscalls:
 /// - **Syscall `1`**: Prints a Ring 3 Telemetry log onto the serial COM1 interface and GOP.
 /// - **Syscall `2`**: Multiplies the provided user value by 10 and returns the calculation.
+/// - **Syscall `3`**: Exits the user-mode execution and returns safely to the Kernel TTY Shell.
 #[no_mangle]
 pub extern "C" fn rust_syscall_handler(id: u64, arg: u64) -> u64 {
     match id {
@@ -149,6 +166,10 @@ pub extern "C" fn rust_syscall_handler(id: u64, arg: u64) -> u64 {
             // Echo calculation syscall
             println!("\x1B[38;5;51m[SYSCALL 2 (MATH)] User Math request. Multiplying {} * 10...\x1B[0m", arg);
             arg * 10 // Return calculated result
+        }
+        3 => {
+            println!("\x1B[38;5;46m[SYSCALL 3 (EXIT)] User program requested exit. Returning to Kernel TTY Shell.\x1B[0m");
+            3 // return 3 to trigger the exit trampoline
         }
         _ => {
             println!("\x1B[38;5;196m[SYSCALL ERR] Invalid system call ID received: {}\x1B[0m", id);
