@@ -36,7 +36,12 @@ The core of the project is a fully-fledged, bootable bare-metal operating system
 Instead of relying on legacy, fragile VGA text mode (`0xB8000`), AE Rustanium binds directly to the UEFI **Graphics Output Protocol (GOP)** linear framebuffer to render a premium dark-themed console with two runtime views:
 
 *   **📊 F2 — Telemetry Dashboard**: A real-time control panel rendering thread activity cards, system ticks, TMR voter stability statistics, and active memory allocation grids.
+    
+    ![AE Rustanium UEFI Telemetry Dashboard](assets/uefi_console.png)
+
 *   **🖥️ F1 — Full-Screen TTY Console**: A scrollable virtual terminal displaying colored system logs and an interactive shell. It renders text using a built-in monospace bitmap font. Supports Page Up/Down navigation over a 250-line log history buffer.
+
+    ![AE Rustanium TTY Console (8x16 Font)](assets/tty_console.png)
 
 ### ⚙️ Low-Level Kernel & Hardware Integration
 *   **Cooperative Multitasking & Assembly Context-Switching**: Implements cooperatively scheduled execution threads running on independent 8 KB stacks. Thread yield and swap operations are managed by a custom inline assembly context switcher (`switch_context`) that preserves callee registers.
