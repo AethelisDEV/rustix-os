@@ -209,9 +209,13 @@ fn translate_scancode(scancode: u8, shift: bool, layout: KeyboardLayout) -> Opti
     }
 }
 
-/// Keyboard polling driver (bypasses blocked legacy interrupts)
 pub fn poll_keyboard() -> Option<KeyboardInput> {
     unsafe {
+        // First check the asynchronous interrupt buffer in case interrupts are active
+        if let Some(input) = crate::interrupts::KEYBOARD_BUFFER.take() {
+            return Some(input);
+        }
+
         let mut status_port: Port<u8> = Port::new(0x64);
         if status_port.read() & 1 != 0 {
             let mut data_port: Port<u8> = Port::new(0x60);

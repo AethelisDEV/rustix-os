@@ -124,9 +124,7 @@ core::arch::global_asm!(
     "mov rsp, [rip + KERNEL_SHELL_RSP]",
     "sub rsp, 8",
     "mov rbp, [rip + KERNEL_SHELL_RBP]",
-    // 3. Re-enable interrupts since FMASK disabled them on syscall entry
-    "sti",
-    // 4. Return to the instruction following enter_user_mode inside demonstrate_user_mode
+    // 3. Return to the instruction following enter_user_mode inside demonstrate_user_mode
     "ret"
 );
 
