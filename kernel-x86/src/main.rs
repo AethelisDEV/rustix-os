@@ -436,16 +436,17 @@ fn panic(info: &PanicInfo) -> ! {
         GRAPHICS.force_unlock();
     }
     if let Some(ref mut graphics) = *GRAPHICS.lock() {
-        graphics.draw_rect(40, 260, 1200, 400, framebuffer::Color::new(180, 0, 0));
-        graphics.draw_rect(40, 260, 1200, 4, framebuffer::Color::new(255, 255, 255));
-        graphics.draw_string(60, 280, "CRITICAL KERNEL PANIC / CPU EXCEPTION DETECTED", framebuffer::COLOR_TEXT_WHITE, None, 2);
-        graphics.draw_rect(60, 304, 1160, 1, framebuffer::COLOR_TEXT_WHITE);
+        // Draw solid red covering the entire screen
+        graphics.clear(framebuffer::Color::new(180, 0, 0));
+        
+        graphics.draw_string(40, 40, "CRITICAL KERNEL PANIC / CPU EXCEPTION DETECTED", framebuffer::COLOR_TEXT_WHITE, None, 2);
+        graphics.draw_rect(40, 64, 1160, 1, framebuffer::COLOR_TEXT_WHITE);
 
         let mut writer = framebuffer::GraphicsWriter {
             graphics,
-            x: 60,
-            y: 320,
-            start_x: 60,
+            x: 40,
+            y: 80,
+            start_x: 40,
             color: framebuffer::COLOR_TEXT_WHITE,
         };
         let _ = write!(&mut writer, "{}", info);

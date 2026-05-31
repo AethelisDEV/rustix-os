@@ -30,25 +30,31 @@ pub static mut KERNEL_SHELL_RBP: u64 = 0;
 /// This function is unsafe because it performs raw memory writes to physical page table structures.
 pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     let offset = PHYSICAL_MEMORY_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    println!(">>> PAGING: map_page_user for VirtAddr: {:#X}, Offset: {:#X}", virt_addr.as_u64(), offset);
     if offset == 0 {
-        return; // Offset not initialized yet
+        println!(">>> ERROR: PHYSICAL_MEMORY_OFFSET is 0!");
+        return;
     }
 
     let (pml4_frame, _) = Cr3::read();
     let pml4_phys = pml4_frame.start_address().as_u64();
     let pml4_virt_ptr = (pml4_phys + offset) as *mut u64;
+    println!(">>> PAGING: PML4 Phys: {:#X}, VirtPtr: {:p}", pml4_phys, pml4_virt_ptr);
 
     let p4_idx = virt_addr.p4_index();
     let p3_idx = virt_addr.p3_index();
     let p2_idx = virt_addr.p2_index();
     let p1_idx = virt_addr.p1_index();
+    println!(">>> PAGING: Indices: L4={}, L3={}, L2={}, L1={}", usize::from(p4_idx), usize::from(p3_idx), usize::from(p2_idx), usize::from(p1_idx));
 
     // 1. Level 4 Entry
     let pml4_entry_ptr = pml4_virt_ptr.add(usize::from(p4_idx));
     let mut pml4_entry = pml4_entry_ptr.read();
+    println!(">>> PAGING: L4 Entry (Before): {:#X}", pml4_entry);
     pml4_entry |= 0x04; // Set USER_ACCESSIBLE bit (0x04)
     pml4_entry &= !(1u64 << 63); // Clear NX (No-Execute) bit to allow user code execution
     pml4_entry_ptr.write(pml4_entry);
+    println!(">>> PAGING: L4 Entry (After): {:#X}", pml4_entry);
 
     let p3_phys = pml4_entry & 0x000F_FFFF_FFFF_F000;
     let p3_virt_ptr = (p3_phys + offset) as *mut u64;
@@ -56,9 +62,11 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     // 2. Level 3 Entry
     let p3_entry_ptr = p3_virt_ptr.add(usize::from(p3_idx));
     let mut p3_entry = p3_entry_ptr.read();
+    println!(">>> PAGING: L3 Entry (Before): {:#X}", p3_entry);
     p3_entry |= 0x04; // Set USER_ACCESSIBLE
     p3_entry &= !(1u64 << 63); // Clear NX bit
     p3_entry_ptr.write(p3_entry);
+    println!(">>> PAGING: L3 Entry (After): {:#X}", p3_entry);
 
     let p2_phys = p3_entry & 0x000F_FFFF_FFFF_F000;
     let p2_virt_ptr = (p2_phys + offset) as *mut u64;
@@ -66,12 +74,15 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     // 3. Level 2 Entry
     let p2_entry_ptr = p2_virt_ptr.add(usize::from(p2_idx));
     let mut p2_entry = p2_entry_ptr.read();
+    println!(">>> PAGING: L2 Entry (Before): {:#X}", p2_entry);
     p2_entry |= 0x04; // Set USER_ACCESSIBLE
     p2_entry &= !(1u64 << 63); // Clear NX bit
     p2_entry_ptr.write(p2_entry);
+    println!(">>> PAGING: L2 Entry (After): {:#X}", p2_entry);
 
     // If it's a huge 2MB page, no Level 1 page table exists
     if (p2_entry & 0x80) != 0 {
+        println!(">>> PAGING: Level 2 is a Huge 2MB Page!");
         x86_64::instructions::tlb::flush(virt_addr);
         return;
     }
@@ -82,9 +93,11 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     // 4. Level 1 Entry (Page Table Entry)
     let p1_entry_ptr = p1_virt_ptr.add(usize::from(p1_idx));
     let mut p1_entry = p1_entry_ptr.read();
+    println!(">>> PAGING: L1 Entry (Before): {:#X}", p1_entry);
     p1_entry |= 0x04; // Set USER_ACCESSIBLE
     p1_entry &= !(1u64 << 63); // Clear NX bit
     p1_entry_ptr.write(p1_entry);
+    println!(">>> PAGING: L1 Entry (After): {:#X}", p1_entry);
 
     // Invalidate TLB cache for this specific virtual address
     x86_64::instructions::tlb::flush(virt_addr);
