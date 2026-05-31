@@ -1,183 +1,91 @@
-# 🌟 AE Rustanium: Safe, Fault-Tolerant & Self-Healing Bare-Metal Operating System
+# 🚀 AE Rustanium: Safe, Fault-Tolerant & Self-Healing Bare-Metal Operating System
 
 [![Rust](https://img.shields.io/badge/rust-stable%20%2F%20nightly-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Safety](https://img.shields.io/badge/safety-Safe%20Core%20%2F%20Bare--metal%20Unsafe-success.svg)](#safety--architecture-principles)
 
-**AE Rustanium** is a custom, microkernel-inspired bare-metal operating system designed specifically to handle **hardware bit-flips, silent data corruption, and cosmic radiation**. It combines high-reliability **Safe Rust core abstractions** for host-side simulation with a **production-ready bare-metal x86-64 target** that boots natively and safely manages low-level hardware interactions.
+**AE Rustanium** is a custom, microkernel-inspired bare-metal operating system for **x86-64 architecture** processors, specifically designed to handle **hardware bit-flips, silent data corruption, and cosmic radiation** without system failure. It targets aerospace computers, deep space probes, and high-altitude systems where Single Event Upsets (SEUs) pose critical failure risks.
 
-Built for environments susceptible to Single Event Upsets (SEUs) such as aerospace, deep space missions, high-altitude aviation, or edge nodes lacking hardware ECC RAM, AE Rustanium dynamically turns standard virtual pages into adaptive self-healing structures.
-
----
-
-## 🚀 Key Features
-
-*   **🛡️ Safe Core / Bare-Metal Unsafe Boundaries**: The core flight simulation components (`memory-subsystem`, `scheduler`, `virtual-fs`, `kernel-core`) are built using 100% safe Rust to guarantee memory safety. Low-level bare-metal hardware components in the `kernel-x86` target leverage standard, strictly isolated `unsafe` blocks for GDT, interrupts, and direct hardware register access.
-*   **💾 Software-Defined ECC Pages**: Implements a robust SECDED (Single Error Correction, Double Error Detection) Hamming Code encoder and decoder. Data is encoded on write and verified on read.
-*   **🧹 Memory Scrubbing Daemon**: A background task sweeps physical memory page-by-page, correcting silent bit-flips (cosmic ray emulation) before they trigger application panics.
-*   **☣️ Dynamic Page Quarantine & Hot-Swap**: If a physical memory frame experiences a severe, uncorrectable double-bit flip, the microkernel quarantines that frame, dynamically allocates a healthy one, and relocates active task memory transparently.
-*   **🗳️ Triple Modular Redundancy (TMR)**: Protects critical calculations (e.g., flight control navigation) from register/ALU corruption by executing tasks in triplicate. An ALU voter uses 2-out-of-3 majority rule to repair register state on the fly.
-*   **🗄️ Unix-Like Inode VFS**: A fully decoupled Virtual File System that writes, reads, and maps directories and files directly onto the ECC-protected virtual physical memory blocks.
-*   **🖥️ Dual-Mode UEFI GOP Console**: A premium dark-themed visual interface with two switchable modes — a **Telemetry Dashboard** (F2) showing live system metrics & static architecture info, and a full-screen **TTY Console** (F1) with Linux kernel 8×16 bitmap font, scrollback history (Page Up/Down), and interactive PS/2 keyboard shell.
-*   **🛸 Retro Aerospace Visual Console**: A beautiful, terminal-based real-time telemetry dashboard styled using raw ANSI escape codes. Observe scrubber sweeps, memory grid status, TMR voters, and interactively inject radiation faults!
+Instead of relying solely on hardware-level ECC RAM, AE Rustanium implements an active, software-defined fault-tolerance layer. It features a native bootable x86-64 microkernel target (`kernel-x86`) that boots directly on modern UEFI/BIOS hardware, initializes direct graphics via UEFI GOP, executes cooperative multitasking via assembly context-switching, and runs background scrubbing daemons alongside Triple Modular Redundancy (TMR) voting systems.
 
 ---
 
 ## 📐 Architecture & Workspace Structure
 
-AE Rustanium is designed with strict module boundaries inside a Cargo workspace:
+AE Rustanium is designed with strict module boundaries inside a Cargo workspace. Core algorithms are separated into standard `no_std` libraries that are then integrated into the bare-metal x86-64 bootable image:
 
 ```
 AE Rustanium/ (Workspace Root)
 ├── Cargo.toml
-├── kernel-core/          # System bootstrapping, modules registration, & HAL
-├── memory-subsystem/     # Software SECDED ECC, page frame allocator, & background scrubber
+├── kernel-x86/           # Real bare-metal x86-64 target wrapper using the bootloader_api
+├── kernel-core/          # Safe kernel bootstrapping, microservices coordinator, and telemetry
+├── memory-subsystem/     # Software SECDED ECC, page frame allocator, and background scrubber
 ├── scheduler/            # Preemptive task dispatcher & TMR voting engine
-├── virtual-fs/           # Inode-based virtual filesystem backed by virtual RAM
-├── simulation-dashboard/ # Terminal GUI, telemetry dashboard, & fault injector
-└── kernel-x86/           # Bare-metal x86-64 target wrapper using the bootloader crate
+├── virtual-fs/           # Inode-based virtual filesystem backed by virtual physical frames
+├── simulation-dashboard/ # Local host development terminal simulator & fault injector
+└── runner/               # Host orchestration crate to build kernel images and launch QEMU
 ```
 
 ---
 
-## 🎮 The Telemetry & Control Dashboard
+## 🛠️ Bare-Metal x86-64 Kernel Features (`kernel-x86`)
 
-When running the simulation, you are presented with a futuristic aerospace command console that operates in real time:
+The core of the project is a fully-fledged, bootable bare-metal operating system. Using the `bootloader_api` framework, it boots on both legacy BIOS systems and modern UEFI flight computers.
 
-```
-==============================================================================
-||              AE RUSTANIUM OS - MODULAR SELF-HEALING MICROKERNEL          ||
-||  [Bit-Flip Fault Tolerance] | [Active Fault Mitigation Flight Controller]  ||
-==============================================================================
+### 🖥️ Dual-Mode UEFI GOP Graphics Console
+Instead of relying on legacy, fragile VGA text mode (`0xB8000`), AE Rustanium binds directly to the UEFI **Graphics Output Protocol (GOP)** linear framebuffer to render a premium dark-themed console with two runtime views:
 
-  PHYSICAL RAM PAGE GRID (8x8)               SYSTEM TELEMETRY DIAGNOSTICS
-  -----------------------------              ---------------------------------
-  [T] [ ] [ ] [ ] [ ] [ ] [ ] [ ]            System Clock Ticks     : 42
-  [ ] [N] [ ] [ ] [ ] [ ] [ ] [ ]            Active Processes       : 3 (T: Tele, N: Navi, L: Life)
-  [ ] [ ] [L] [ ] [ ] [ ] [ ] [ ]            Background Sweeps      : 5
-  [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ]            Single-Bit ECC Repairs : 2 (Hamming SECDED)
-  [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ]            Quarantined Pages (X)  : 1 (MMU Isolated)
-  [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ]            Dynamic Relocations    : 1 (Self-Healing)
-  [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ]            Redundant TMR Tasks    : 3
-  [ ] [ ] [ ] [ ] [ ] [ ] [ ] [ ]            ALU Voter Corrections  : 1 (Triple Redundancy)
+*   **📊 F2 — Telemetry Dashboard**: A real-time control panel rendering thread activity cards, system ticks, TMR voter stability statistics, and active memory allocation grids.
+*   **🖥️ F1 — Full-Screen TTY Console**: A scrollable virtual terminal displaying colored system logs and an interactive shell. It renders text using a built-in monospace bitmap font. Supports Page Up/Down navigation over a 250-line log history buffer.
 
-  Legend: [ ] Healthy | [ ] ECC Corrected | [X] Quarantined | T/N/L: Running Tasks
-```
-
-### Dashboard Actions:
-1.  **[1] Advance Kernel Clock (Tick)**: Step the CPU clock, dispatch tasks, and trigger memory sweeps.
-2.  **[2] Inject Random Single-Bit Flip**: Simulates a cosmic ray ionizing a memory cell. Watch the SECDED decoder automatically correct it during a read or the scrubber sweep it.
-3.  **[3] Inject Random Double-Bit Flip**: Triggers severe data corruption. Watch the MMU page fault intercept this, quarantine the frame, allocate a new page, and migrate the task!
-4.  **[4] Inject ALU Register Bit Flip**: Corrupts the registers of a critical TMR process. The voter engine intercepts the divergence, applies the majority rule, corrects the corrupt thread, and continues without downtime.
-5.  **[5] Enable Autonomous Autopilot**: Ticks the system continuously with rich animations to watch self-healing dynamics in real time.
-6.  **[6] Enter Unix Command Shell**: Drop into a command terminal operating directly inside the self-healing VFS.
-7.  **[0] System Power Down**: Power off and halt the OS.
+### ⚙️ Low-Level Kernel & Hardware Integration
+*   **Cooperative Multitasking & Assembly Context-Switching**: Implements cooperatively scheduled execution threads running on independent 8 KB stacks. Thread yield and swap operations are managed by a custom inline assembly context switcher (`switch_context`) that preserves callee registers.
+*   **SSE & FPU Hardware Activation**: Initializes control registers (`CR0` and `CR4`) during boot stages to enable SSE and SIMD instruction sets, preventing invalid opcode exceptions on bulk memory actions.
+*   **LockedHeap Dynamic Allocator**: Bypasses leaky bump allocators by integrating `linked_list_allocator::LockedHeap` with a 1 MB heap buffer, reclaiming deallocated memory to ensure leak-free continuous operation.
+*   **Unified Visual Panic Screen**: Features a robust exception handling framework. Upon division-by-zero, page faults, or double faults, it forcefully unlocks graphics handlers and prints complete diagnostic crash traces directly onto a high-visibility red screen.
+*   **Interrupt & Polling Hardware Drivers**: Utilizes cooperative I/O polling for high safety margins on modern motherboards. Decodes PS/2 keyboard scancodes directly from I/O ports `0x60` and `0x64` (supporting both US and Turkish Q layouts via the `loadkeys` command) and streams diagnostics to the COM1 UART serial port (`0x3F8`).
 
 ---
 
-## 🐚 Decentralized Unix Terminal Shell
+## 🛡️ Software-Defined Fault Tolerance & Safety
 
-Enter action `[6]` from the control panel to access the virtual Unix shell. It operates inside a custom inode filesystem mapping files onto the self-healing RAM frames.
+To keep spaceborne computers functional without crash-induced hardware failures, AE Rustanium coordinates multiple software-defined reliability layers:
 
-Available commands:
-*   `ls [path]` — List directory entries (e.g., `ls /system`)
-*   `cd [path]` — Traverses directory hierarchy (`cd /data/logs` or `cd ..`)
-*   `mkdir <path>` — Create nested directories
-*   `touch <path>` — Create empty virtual files
-*   `cat <path>` — Outputs file contents with SECDED parity verification
-*   `write <path> <text>` — Encodes text into SECDED words and writes to VFS
-*   `rm [-rf] <path>` — Recursively delete files and folders
-*   `hexdump <path>` — View raw bytes in Hex and ASCII
-*   `hexdump -p <page_index>` — **Dump raw 13-bit SECDED physical memory registers** directly from virtual RAM frames!
-*   `df` — View disk/memory capacity, free blocks, and a live health visualizer bar
-*   `ps` — Monitor running microkernel processes and TMR protection status
-*   `sudo <command>` — Run terminal command with administrator flight clearance logs
-*   `exit` — Gracefully return to the main dashboard
+*   **💾 Software SECDED ECC Pages**: All physical memory frames can be wrapped in a software SECDED (Single Error Correction, Double Error Detection) Hamming Code block, verifying data integrity on reads and rewriting corrected data on single-bit failures.
+*   **🧹 Memory Scrubbing Daemon**: Runs as a background cooperative thread, scanning allocated memory frames page-by-page to detect and correct latent single-bit flips before they impact active programs.
+*   **☣️ Quarantine & Hot-Swap**: If a severe, uncorrectable double-bit flip is identified, the kernel isolates the damaged physical frame, dynamically provisions a healthy frame, and migrates task data safely.
+*   **🗳️ Triple Modular Redundancy (TMR)**: Crucial flight calculations (like Navigation delta-V calculations) run in triplicate across isolated memory spaces. A software ALU voter performs 2-out-of-3 majority verification to detect and repair register-level bit-flips on the fly.
 
 ---
 
-## 🛠️ Build and Verification Guide
+## 🚀 Running the Operating System
 
-### Prerequisites
-*   [Rust Stable Toolchain](https://rustup.rs/) (to run the simulation & dashboard)
-*   [Rust Nightly Toolchain](https://rustup.rs/) (required *only* for the experimental bare-metal `kernel-x86` target)
-
-### Running the Interactive Simulation
-Compile and boot the interactive visual flight dashboard instantly using standard Rust:
+### 1. Local Testing & Verification
+You can compile and run the interactive console simulator directly on your host machine (Windows/Linux/macOS) to test the mathematical models, SECDED correction, TMR voters, and filesystem logic:
 ```bash
 cargo run --package simulation-dashboard
 ```
 
-### Running the Workspace Test Suite
-Validate the SECDED Hamming math, memory allocation bounds, TMR majority voters, and VFS inode trees:
+You can also run the full test suite verifying Hamming ECC decoding, memory allocation bounds, and TMR voting math:
 ```bash
 cargo test --workspace
 ```
 
-### Zero-Warning Verification
-Check the workspace using Clippy under strict rules:
-```bash
-cargo clippy --workspace -- -D warnings
-```
+### 2. Emulating the Bare-Metal Kernel in QEMU
+We have automated the building and booting process. No manual image partitioning or `bootimage` setups are required.
 
----
+*   Ensure you have [QEMU](https://www.qemu.org/) installed and added to your system path.
+*   Execute the host orchestrator runner:
+    ```bash
+    cargo run --package runner
+    ```
+This utility automatically compiles `kernel-x86` for `x86_64-unknown-none`, outputs flashable BIOS (`bios.img`) and GPT UEFI (`uefi.img`) disk partition files, and boots QEMU with serial output mirrored directly to your active developer terminal.
 
-## 🛰️ UEFI & BIOS Dual-Boot Bare-Metal Target (`kernel-x86`)
-
-The `kernel-x86` crate is a fully-fledged bare-metal x86-64 operating system target. Using the `bootloader_api` (v0.11) framework, it supports booting on both legacy BIOS systems and modern UEFI flight computers (such as Ryzen 7000/9000 AM5 series PCs).
-
-### 🖥️ High-Performance UEFI GOP Framebuffer Graphics
-Instead of relying on outdated `0xB8000` VGA text mode (which crashes on modern UEFI systems), AE Rustanium dynamically binds to the UEFI **Graphics Output Protocol (GOP)** linear framebuffer. It provides a dual-mode premium dark-themed console:
-
-#### 📊 F2 — Telemetry Dashboard
-*   **Active Thread Status Cards**: Live rendering of Thread 1 (Memory Scrubber) and Thread 2 (Telemetry engine).
-*   **System Diagnostics Panel**: Live ticks, voter health percentage, and a dynamic heartbeat progress bar.
-*   **Static Architecture Info Panel**: Two-column reference display of kernel architecture and safety/reliability subsystems — drawn once at boot, zero flicker.
-
-![AE Rustanium UEFI Telemetry Dashboard](assets/uefi_console.png)
-
-#### 🖥️ F1 — Full-Screen TTY Console (8×16 Bitmap Font)
-A dedicated bare-metal virtual terminal powered by the authentic **Linux kernel 8×16 monospace bitmap font** (extracted directly from `lib/fonts/font_8x16.c`):
-*   **250-line scrollback history** with Page Up / Page Down navigation and a live scrollbar thumb.
-*   **ANSI color-coded log output**: system messages, kernel events, errors, and healing events each render in distinct colors.
-*   **Flicker-free partial updates**: only the changed region (logs, prompt, or uptime bar) is redrawn on each tick — no full-screen clear.
-*   **Interactive PS/2 shell**: type commands directly (`ls`, `cat`, `mkdir`, `write`, `free`, `uname`, `uptime`, etc.) with a live cursor prompt.
-
-![AE Rustanium TTY Console (8x16 Font)](assets/tty_console.png)
-
-### 🔌 Physical Hardware Optimization & Safety
-For native booting on modern flight hardware (such as AMD Ryzen platforms), several critical architectural enhancements have been implemented:
-1.  **Direct I/O Port Polling (Interrupt Safety)**: Modern UEFI systems ignore or mask legacy 8259 PIC interrupts, and BIOS/UEFI USB keyboard emulation can cause unhandled interrupt conflicts. To guarantee absolute stability, CPU hardware interrupts are kept completely disabled (`cli`). The PS/2 keyboard is read directly from ports `0x60` and `0x64` via a robust polling driver integrated into the main loop, bypassing legacy interrupts entirely.
-2.  **Unified Visual Panic Screen (Red Screen of Death)**: When a kernel panic or CPU exception (GPF, Page Fault, Stack Segment Fault, Divide by Zero) occurs on physical hardware, there is no serial debugger attached. We implemented a custom `GraphicsWriter` that formats text directly to the UEFI GOP framebuffer. If a crash occurs, the handler forcefully releases graphics locks and displays the crash dump visually in a bright red diagnostic console on the monitor instead of silently freezing.
-3.  **LockedHeap Dynamic Memory Allocation**: Standard bare-metal OS bump allocators leak memory upon deallocation, causing loop allocations in a continuous tick loop to run out of memory. We integrated the standard `linked_list_allocator::LockedHeap` with a 1 MB static heap buffer, enabling full memory reclamation and ensuring indefinite, leak-free continuous runtime on real hardware.
-
----
-
-### 🚀 Running the Kernel in QEMU (Zero-Setup Emulation)
-We have implemented an automated workspace builder and runner. You do not need to install `bootimage` or any external tools!
-
-1. Make sure you have [QEMU](https://www.qemu.org/) installed at `C:\Program Files\qemu\qemu-system-x86_64.exe`.
-2. Run the automated host runner from your terminal:
-   ```bash
-   cargo run --package runner
-   ```
-This command programmatically:
-1. Compiles `kernel-x86` for `x86_64-unknown-none`.
-2. Generates a legacy BIOS boot disk image at `target/x86_64-unknown-none/debug/bios.img`.
-3. Generates a modern GPT UEFI boot disk image at `target/x86_64-unknown-none/debug/uefi.img`.
-4. Spawns QEMU using the BIOS image with COM1 serial port output piped directly to your active console in real time!
-
----
-
-### 🔌 Booting on a Real UEFI PC 
-To boot this kernel on your physical computer:
-1. Locate the generated **`uefi.img`** at `target/x86_64-unknown-none/debug/uefi.img` (or `release/uefi.img` if compiled with `cargo run --package runner -- --release`).
-2. Insert a USB flash drive.
-3. Open a raw writer tool like **Rufus**:
-   *   Select your USB Drive.
-   *   Choose "Disk or ISO Image" and select `uefi.img`.
-   *   Ensure you write it in **DD Image Mode** (this writes the raw GPT partition containing the bootloader `/EFI/BOOT/BOOTX64.EFI` directly).
-4. Restart your PC, enter UEFI/BIOS settings, select the USB drive as the primary boot device, and watch AE Rustanium boot directly on real hardware!
+### 3. Booting on Physical Hardware (UEFI)
+To run this kernel on real x86-64 computer systems:
+1. Locate the generated raw GPT disk image at `target/x86_64-unknown-none/debug/uefi.img` (or `release/uefi.img` if compiled with `--release`).
+2. Flash the raw image to an external USB storage drive using a tool like **Rufus** (select **DD Image Mode** to write raw partitions directly).
+3. Restart your target computer, choose the USB drive as your boot device in the UEFI boot menu, and watch AE Rustanium boot bare-metal.
 
 ---
 

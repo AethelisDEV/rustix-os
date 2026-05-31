@@ -128,7 +128,7 @@ impl SystemCore {
         self.execute_orbital_calculation();
 
         // Log real-time diagnostic tick summary to serial port periodically to keep terminal clean
-        if self.scrubber_sweeps % 500 == 0 {
+        if self.scrubber_sweeps.is_multiple_of(500) {
             let tick_summary = format!(
                 "[Tick {:4}] Sweeps: {} | ECC: {} | Quarantined: {} | Relocated: {}\n",
                 self.scrubber_sweeps,
