@@ -57,6 +57,7 @@ pub fn handle_command(
             println!("  loadkeys <lay>   - Switch keyboard layout (us, trq)");
             println!("  status           - Microkernel health & memory metrics");
             println!("  tasks            - List running microservices");
+            println!("  usermode         - Launch Ring 3 User Space & Syscall demonstration");
             println!("  inject-flip      - Inject synthetic radiation bit flip");
             println!("  clear            - Clear the console screen");
             println!("  help             - Show this help menu");
@@ -121,6 +122,13 @@ pub fn handle_command(
                     p.allocated_pages
                 );
             }
+            println!("------------------------------------------------------------");
+        }
+        "usermode" => {
+            println!("------------------------------------------------------------");
+            println!("LAUNCHING RING 3 USER SPACE & SYSCALL DEMONSTRATION");
+            println!("------------------------------------------------------------");
+            crate::usermode::demonstrate_user_mode();
             println!("------------------------------------------------------------");
         }
         "inject-flip" => {

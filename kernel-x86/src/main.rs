@@ -17,6 +17,9 @@ pub mod scheduler;
 pub mod framebuffer;
 pub mod keyboard;
 pub mod shell;
+pub mod gdt;
+pub mod syscall;
+pub mod usermode;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -152,6 +155,10 @@ bootloader_api::entry_point!(kernel_main);
 
 /// The absolute entry point of the bare-metal x86_64 operating system kernel.
 fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
+    // Store physical memory offset for user space paging traversal
+    let phys_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
+    usermode::PHYSICAL_MEMORY_OFFSET.store(phys_offset, Ordering::Release);
+
     // 1. Initialize serial port hardware immediately
     {
         let mut writer = logger::SERIAL_WRITER.lock();
@@ -170,8 +177,12 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
         graphics.update_keyboard_prompt("rustanium:/> ");
     }
 
-    // 3. Enable SSE and configure 8259 PIC + IDT interrupts
+    // 3. Enable SSE, initialize GDT/TSS and Syscalls, and configure 8259 PIC + IDT interrupts
     enable_sse();
+    unsafe {
+        gdt::init_gdt();
+        syscall::init_syscalls();
+    }
     interrupts::init_idt();
     unsafe {
         interrupts::PICS.initialize();
