@@ -58,6 +58,7 @@ pub fn handle_command(
             println!("  status           - Microkernel health & memory metrics");
             println!("  tasks            - List running microservices");
             println!("  usermode         - Launch Ring 3 User Space & Syscall demonstration");
+            println!("  run <path>       - Dynamically load and run a Ring 3 VFS binary");
             println!("  inject-flip      - Inject synthetic radiation bit flip");
             println!("  clear            - Clear the console screen");
             println!("  help             - Show this help menu");
@@ -128,8 +129,27 @@ pub fn handle_command(
             println!("------------------------------------------------------------");
             println!("LAUNCHING RING 3 USER SPACE & SYSCALL DEMONSTRATION");
             println!("------------------------------------------------------------");
-            crate::usermode::demonstrate_user_mode();
+            usermode_x86::demonstrate_user_mode();
             println!("------------------------------------------------------------");
+        }
+        "run" => {
+            if args.is_empty() {
+                println!("\x1B[38;5;196mUsage: run <path_to_binary.bin>\x1B[0m");
+                return;
+            }
+            let file_path = resolve_relative_path(cwd, args[0]);
+            match core.vfs.read_file(&file_path, &mut core.allocator) {
+                Ok(data) => {
+                    println!("------------------------------------------------------------");
+                    println!("LAUNCHING RING 3 PROCESS FROM VFS: {}", file_path);
+                    println!("------------------------------------------------------------");
+                    usermode_x86::execute_user_program(&data);
+                    println!("------------------------------------------------------------");
+                }
+                Err(e) => {
+                    println!("\x1B[38;5;196m[RUN ERR] Failed to load program '{}': {}\x1B[0m", file_path, e);
+                }
+            }
         }
         "inject-flip" => {
             // Find the first allocated frame

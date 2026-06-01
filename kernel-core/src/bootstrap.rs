@@ -70,6 +70,49 @@ impl SystemCore {
         let _ = vfs.mkdir("/", "data");
         let _ = vfs.mkdir("/", "bin");
 
+        // 1. Pre-populate /bin/demo.bin with the math payload
+        let demo_bytes: &[u8] = &[
+            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
+            0x48, 0x8D, 0x3D, 0x2B, 0x00, 0x00, 0x00,
+            0x0F, 0x05,
+            0x48, 0xC7, 0xC0, 0x02, 0x00, 0x00, 0x00,
+            0x48, 0xC7, 0xC7, 0x2A, 0x00, 0x00, 0x00,
+            0x0F, 0x05,
+            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
+            0x48, 0x8D, 0x3D, 0x2C, 0x00, 0x00, 0x00,
+            0x0F, 0x05,
+            0x48, 0xC7, 0xC0, 0x03, 0x00, 0x00, 0x00,
+            0x0F, 0x05,
+            b'H', b'e', b'l', b'l', b'o', b' ', b'f', b'r', b'o', b'm', b' ', 
+            b'R', b'i', b'n', b'g', b' ', b'3', b' ', b'(', b'U', b's', b'e', 
+            b'r', b' ', b'S', b'p', b'a', b'c', b'e', b')', b'!', 0x0A, 0x00,
+            b'M', b'a', b't', b'h', b' ', b'v', b'e', b'r', b'i', b'f', b'i', 
+            b'c', b'a', b't', b'i', b'o', b'n', b':', b' ', b'4', b'2', b' ', 
+            b'*', b' ', b'1', b'0', b' ', b'r', b'e', b's', b'o', b'l', b'v', 
+            b'e', b'd', b' ', b's', b'u', b'c', b'c', b'e', b's', b's', b'f', 
+            b'u', b'l', b'l', b'y', b'.', 0x0A, 0x00
+        ];
+        if vfs.create_file("/bin", "demo.bin").is_ok() {
+            let _ = vfs.write_file("/bin/demo.bin", demo_bytes, &mut allocator, 0);
+        }
+
+        // 2. Pre-populate /bin/hello.bin with the greetings payload
+        let hello_bytes: &[u8] = &[
+            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
+            0x48, 0x8D, 0x3D, 0x0B, 0x00, 0x00, 0x00,
+            0x0F, 0x05,
+            0x48, 0xC7, 0xC0, 0x03, 0x00, 0x00, 0x00,
+            0x0F, 0x05,
+            b'G', b'r', b'e', b'e', b't', b'i', b'n', b'g', b's', b' ', b'f', 
+            b'r', b'o', b'm', b' ', b'D', b'y', b'n', b'a', b'm', b'i', b'c', 
+            b' ', b'V', b'F', b'S', b' ', b'L', b'o', b'a', b'd', b'e', b'r', 
+            b'!', b' ', b'R', b'i', b'n', b'g', b' ', b'3', b' ', b'a', b'c', 
+            b't', b'i', b'v', b'e', b'.', 0x0A, 0x00
+        ];
+        if vfs.create_file("/bin", "hello.bin").is_ok() {
+            let _ = vfs.write_file("/bin/hello.bin", hello_bytes, &mut allocator, 0);
+        }
+
         // Create default system configuration and log files mapped to protected memory frames
         if vfs.create_file("/system", "kernel.conf").is_ok() {
             let _ = vfs.write_file(

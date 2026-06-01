@@ -8,6 +8,7 @@
 
 use x86_64::VirtAddr;
 use x86_64::registers::control::Cr3;
+use crate::log_info;
 
 /// Global static to store the physical memory offset provided by the bootloader.
 pub static PHYSICAL_MEMORY_OFFSET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -30,31 +31,31 @@ pub static mut KERNEL_SHELL_RBP: u64 = 0;
 /// This function is unsafe because it performs raw memory writes to physical page table structures.
 pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     let offset = PHYSICAL_MEMORY_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-    println!(">>> PAGING: map_page_user for VirtAddr: {:#X}, Offset: {:#X}", virt_addr.as_u64(), offset);
+    log_info!(">>> PAGING: map_page_user for VirtAddr: {:#X}, Offset: {:#X}", virt_addr.as_u64(), offset);
     if offset == 0 {
-        println!(">>> ERROR: PHYSICAL_MEMORY_OFFSET is 0!");
+        log_info!(">>> ERROR: PHYSICAL_MEMORY_OFFSET is 0!");
         return;
     }
 
     let (pml4_frame, _) = Cr3::read();
     let pml4_phys = pml4_frame.start_address().as_u64();
     let pml4_virt_ptr = (pml4_phys + offset) as *mut u64;
-    println!(">>> PAGING: PML4 Phys: {:#X}, VirtPtr: {:p}", pml4_phys, pml4_virt_ptr);
+    log_info!(">>> PAGING: PML4 Phys: {:#X}, VirtPtr: {:p}", pml4_phys, pml4_virt_ptr);
 
     let p4_idx = virt_addr.p4_index();
     let p3_idx = virt_addr.p3_index();
     let p2_idx = virt_addr.p2_index();
     let p1_idx = virt_addr.p1_index();
-    println!(">>> PAGING: Indices: L4={}, L3={}, L2={}, L1={}", usize::from(p4_idx), usize::from(p3_idx), usize::from(p2_idx), usize::from(p1_idx));
+    log_info!(">>> PAGING: Indices: L4={}, L3={}, L2={}, L1={}", usize::from(p4_idx), usize::from(p3_idx), usize::from(p2_idx), usize::from(p1_idx));
 
     // 1. Level 4 Entry
     let pml4_entry_ptr = pml4_virt_ptr.add(usize::from(p4_idx));
     let mut pml4_entry = pml4_entry_ptr.read();
-    println!(">>> PAGING: L4 Entry (Before): {:#X}", pml4_entry);
+    log_info!(">>> PAGING: L4 Entry (Before): {:#X}", pml4_entry);
     pml4_entry |= 0x04; // Set USER_ACCESSIBLE bit (0x04)
     pml4_entry &= !(1u64 << 63); // Clear NX (No-Execute) bit to allow user code execution
     pml4_entry_ptr.write(pml4_entry);
-    println!(">>> PAGING: L4 Entry (After): {:#X}", pml4_entry);
+    log_info!(">>> PAGING: L4 Entry (After): {:#X}", pml4_entry);
 
     let p3_phys = pml4_entry & 0x000F_FFFF_FFFF_F000;
     let p3_virt_ptr = (p3_phys + offset) as *mut u64;
@@ -62,11 +63,11 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     // 2. Level 3 Entry
     let p3_entry_ptr = p3_virt_ptr.add(usize::from(p3_idx));
     let mut p3_entry = p3_entry_ptr.read();
-    println!(">>> PAGING: L3 Entry (Before): {:#X}", p3_entry);
+    log_info!(">>> PAGING: L3 Entry (Before): {:#X}", p3_entry);
     p3_entry |= 0x04; // Set USER_ACCESSIBLE
     p3_entry &= !(1u64 << 63); // Clear NX bit
     p3_entry_ptr.write(p3_entry);
-    println!(">>> PAGING: L3 Entry (After): {:#X}", p3_entry);
+    log_info!(">>> PAGING: L3 Entry (After): {:#X}", p3_entry);
 
     let p2_phys = p3_entry & 0x000F_FFFF_FFFF_F000;
     let p2_virt_ptr = (p2_phys + offset) as *mut u64;
@@ -74,15 +75,15 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     // 3. Level 2 Entry
     let p2_entry_ptr = p2_virt_ptr.add(usize::from(p2_idx));
     let mut p2_entry = p2_entry_ptr.read();
-    println!(">>> PAGING: L2 Entry (Before): {:#X}", p2_entry);
+    log_info!(">>> PAGING: L2 Entry (Before): {:#X}", p2_entry);
     p2_entry |= 0x04; // Set USER_ACCESSIBLE
     p2_entry &= !(1u64 << 63); // Clear NX bit
     p2_entry_ptr.write(p2_entry);
-    println!(">>> PAGING: L2 Entry (After): {:#X}", p2_entry);
+    log_info!(">>> PAGING: L2 Entry (After): {:#X}", p2_entry);
 
     // If it's a huge 2MB page, no Level 1 page table exists
     if (p2_entry & 0x80) != 0 {
-        println!(">>> PAGING: Level 2 is a Huge 2MB Page!");
+        log_info!(">>> PAGING: Level 2 is a Huge 2MB Page!");
         x86_64::instructions::tlb::flush(virt_addr);
         return;
     }
@@ -93,11 +94,11 @@ pub unsafe fn map_page_user(virt_addr: VirtAddr) {
     // 4. Level 1 Entry (Page Table Entry)
     let p1_entry_ptr = p1_virt_ptr.add(usize::from(p1_idx));
     let mut p1_entry = p1_entry_ptr.read();
-    println!(">>> PAGING: L1 Entry (Before): {:#X}", p1_entry);
+    log_info!(">>> PAGING: L1 Entry (Before): {:#X}", p1_entry);
     p1_entry |= 0x04; // Set USER_ACCESSIBLE
     p1_entry &= !(1u64 << 63); // Clear NX bit
     p1_entry_ptr.write(p1_entry);
-    println!(">>> PAGING: L1 Entry (After): {:#X}", p1_entry);
+    log_info!(">>> PAGING: L1 Entry (After): {:#X}", p1_entry);
 
     // Invalidate TLB cache for this specific virtual address
     x86_64::instructions::tlb::flush(virt_addr);
@@ -141,30 +142,57 @@ extern "C" {
 ///
 /// Saves kernel shell registers before entry, and upon Syscall 3 (Exit), the kernel
 /// restores registers to return control back to the Shell command loop.
-pub fn demonstrate_user_mode() {
-    println!("🔌 Step 1: Allocating isolated User Code and User Stack page frames...");
+/// Allocates isolated pages, maps them user-accessible, copies the provided executable
+/// program bytes, and transitions privilege level to Ring 3 User Mode.
+pub fn execute_user_program(program_bytes: &[u8]) {
+    log_info!("🔌 Step 1: Allocating isolated User Code and User Stack page frames...");
 
-    // Allocate isolated 4 KB blocks for Code and Stack using heap vectors aligned to 4096 bytes
+    // Allocate isolated 4 KB blocks for Code and Stack using heap vectors
     let mut code_page: alloc::vec::Vec<u8> = alloc::vec![0u8; 4096];
     let mut stack_page: alloc::vec::Vec<u8> = alloc::vec![0u8; 4096];
 
     let code_ptr = code_page.as_mut_ptr();
     let stack_ptr = stack_page.as_mut_ptr();
 
-    println!("📂 Step 2: Mapping memory pages as USER_ACCESSIBLE inside PML4 tables...");
+    log_info!("📂 Step 2: Mapping memory pages as USER_ACCESSIBLE inside PML4 tables...");
     unsafe {
         map_page_user(VirtAddr::from_ptr(code_ptr));
         map_page_user(VirtAddr::from_ptr(stack_ptr));
     }
 
-    println!("✅ Memory mapped successfully!");
-    println!("📦 Step 3: Copying Ring 3 assembly payload to User Code segment...");
+    log_info!("✅ Memory mapped successfully!");
+    log_info!("📦 Step 3: Copying Ring 3 assembly payload to User Code segment...");
 
-    // Binary payload representing a self-contained assembly program that triggers Syscalls:
-    // 1. Syscall 1 (Telemetry) -> print "Hello from Ring 3!"
-    // 2. Syscall 2 (Math) -> calculate 42 * 10
-    // 3. Syscall 1 (Telemetry) -> print success message
-    // 4. Syscall 3 (Exit) -> exit program and return to Shell
+    // Truncate copy to prevent overflowing code page limit of 4096 bytes
+    let copy_len = core::cmp::min(program_bytes.len(), 4096);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            program_bytes.as_ptr(),
+            code_ptr,
+            copy_len,
+        );
+    }
+
+    let user_code_address = code_ptr as u64;
+    let user_stack_top = stack_ptr as u64 + 4096 - 8;
+
+    log_info!("🚀 Step 4: Swapping imtiyaz status. Jumping to Ring 3 (User Mode) trampoline...");
+    log_info!("------------------------------------------------------------");
+
+    unsafe {
+        // Save current secure kernel shell RSP and RBP
+        // When Syscall 3 is invoked inside Ring 3, the CPU will jump back to Kernel Shell
+        // by restoring these values and executing 'ret' safely.
+        core::arch::asm!(
+            "mov [rip + KERNEL_SHELL_RSP], rsp",
+            "mov [rip + KERNEL_SHELL_RBP], rbp",
+        );
+
+        enter_user_mode(user_code_address, user_stack_top);
+    }
+}
+
+pub fn demonstrate_user_mode() {
     let user_program_bytes: &[u8] = &[
         // mov rax, 1 (Syscall 1)
         0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
@@ -202,30 +230,5 @@ pub fn demonstrate_user_mode() {
         b'u', b'l', b'l', b'y', b'.', 0x0A, 0x00
     ];
 
-    unsafe {
-        // Copy instructions to User Code page memory space
-        core::ptr::copy_nonoverlapping(
-            user_program_bytes.as_ptr(),
-            code_ptr,
-            user_program_bytes.len(),
-        );
-    }
-
-    let user_code_address = code_ptr as u64;
-    let user_stack_top = stack_ptr as u64 + 4096 - 8;
-
-    println!("🚀 Step 4: Swapping imtiyaz status. Jumping to Ring 3 (User Mode) trampoline...");
-    println!("------------------------------------------------------------");
-
-    unsafe {
-        // Save current secure kernel shell RSP and RBP
-        // When Syscall 3 is invoked inside Ring 3, the CPU will jump back to Kernel Shell
-        // by restoring these values and executing 'ret' safely.
-        core::arch::asm!(
-            "mov [rip + KERNEL_SHELL_RSP], rsp",
-            "mov [rip + KERNEL_SHELL_RBP], rbp",
-        );
-
-        enter_user_mode(user_code_address, user_stack_top);
-    }
+    execute_user_program(user_program_bytes);
 }

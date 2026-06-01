@@ -23,6 +23,10 @@ pub enum KeyboardInput {
     PageUp,
     /// Page Down scrollback key.
     PageDown,
+    /// Up Arrow key press for scrollback.
+    ArrowUp,
+    /// Down Arrow key press for scrollback.
+    ArrowDown,
 }
 
 /// Keyboard layout type.
@@ -79,6 +83,10 @@ impl KeyboardState {
             0x49 => Some(KeyboardInput::PageUp),
             // Page Down Pressed
             0x51 => Some(KeyboardInput::PageDown),
+            // Up Arrow Pressed
+            0x48 => Some(KeyboardInput::ArrowUp),
+            // Down Arrow Pressed
+            0x50 => Some(KeyboardInput::ArrowDown),
             // Standard scan codes
             code => {
                 // Ignore key releases (scan code set 1 sets bit 7)

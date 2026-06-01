@@ -2,13 +2,6 @@
 //!
 //! This module configures model-specific registers (MSRs) and handles raw system calls
 //! initiated by Ring 3 user programs via the `syscall` assembly instruction.
-//!
-//! Implements:
-//! 1. Enabling System Call Extensions (SCE) inside `IA32_EFER`.
-//! 2. Configuring privilege boundaries and segment bases inside `IA32_STAR`.
-//! 3. Initializing the 64-bit target instruction pointer inside `IA32_LSTAR` pointing to `syscall_entry`.
-//! 4. Masking interrupt flags inside `IA32_FMASK` on entry.
-//! 5. Stacking, executing, and returning from the system call via `sysretq`.
 
 use x86_64::registers::model_specific::Msr;
 
@@ -29,6 +22,10 @@ pub static mut USER_RSP: u64 = 0;
 #[no_mangle]
 pub static mut KERNEL_STACK_TOP: u64 = 0;
 
+/// Global dynamic system call handler registered from the main kernel at boot.
+#[no_mangle]
+pub static mut SYSCALL_HANDLER: usize = 0;
+
 /// Initializes MSR registers to enable and route system calls on x86-64 hardware.
 ///
 /// Sets up:
@@ -40,10 +37,10 @@ pub static mut KERNEL_STACK_TOP: u64 = 0;
 /// # Safety
 /// This function is unsafe because it writes directly to Model-Specific Registers,
 /// which can trigger CPU exceptions if descriptors or handlers are invalid.
-pub unsafe fn init_syscalls() {
-    // 1. Populate the secure kernel stack top from our loaded TSS privilege stack
-    let stack_top = crate::gdt::TSS.privilege_stack_table[0].as_u64();
-    KERNEL_STACK_TOP = stack_top;
+pub unsafe fn init_syscalls(kernel_stack_top: u64, handler: extern "C" fn(u64, u64) -> u64) {
+    // 1. Populate the secure kernel stack top and the dynamic syscall handler callback
+    KERNEL_STACK_TOP = kernel_stack_top;
+    SYSCALL_HANDLER = handler as usize;
 
     // 2. Enable System Call Extensions inside EFER
     let mut efer_msr = Msr::new(MSR_EFER);
@@ -51,11 +48,6 @@ pub unsafe fn init_syscalls() {
     efer_msr.write(efer_val | 1); // Set SCE bit (bit 0)
 
     // 3. Configure Segment Selectors in STAR
-    // Bits 32-47: Kernel base selector (loaded into CS on syscall. SS is loaded as CS + 8).
-    // Bits 48-63: User base selector (on sysret, CS is loaded as User Base + 16, SS as User Base + 8).
-    // Kernel Code = 0x08, Kernel Data = 0x10.
-    // User Data = 0x18 (index 3), User Code = 0x20 (index 4).
-    // Thus: User Base = GDT index 2 (0x10) ORed with RPL 3 = 0x13.
     let mut star_msr = Msr::new(MSR_STAR);
     let star_high: u64 = ((0x08u64) << 32) | ((0x13u64) << 48);
     star_msr.write(star_high);
@@ -94,8 +86,9 @@ core::arch::global_asm!(
     // User argument is in RDI -> becomes 2nd argument (RSI in Rust)
     "mov rsi, rdi",
     "mov rdi, rax",
-    // Call our Rust handler safely
-    "call rust_syscall_handler",
+    // Call our registered dynamic Rust handler function pointer safely
+    "mov rax, [rip + SYSCALL_HANDLER]",
+    "call rax",
     // Now RAX contains the return value of our syscall handler
     "cmp rax, 3",
     "je syscall_exit_handler",
@@ -124,54 +117,11 @@ core::arch::global_asm!(
     "mov rsp, [rip + KERNEL_SHELL_RSP]",
     "sub rsp, 8",
     "mov rbp, [rip + KERNEL_SHELL_RBP]",
-    // 3. Return to the instruction following enter_user_mode inside demonstrate_user_mode
+    // 3. Return to the instruction following enter_user_mode inside execute_user_program
     "ret"
 );
 
 // Declare the external assembly function so Rust can reference it
 extern "C" {
     fn syscall_entry();
-}
-
-/// Safe Rust Syscall Dispatcher handler called directly from the global assembly handler.
-///
-/// Parses the incoming syscall ID and returns the result back to RAX.
-///
-/// Supported Syscalls:
-/// - **Syscall `1`**: Prints a Ring 3 Telemetry log onto the serial COM1 interface and GOP.
-/// - **Syscall `2`**: Multiplies the provided user value by 10 and returns the calculation.
-/// - **Syscall `3`**: Exits the user-mode execution and returns safely to the Kernel TTY Shell.
-#[no_mangle]
-pub extern "C" fn rust_syscall_handler(id: u64, arg: u64) -> u64 {
-    match id {
-        1 => {
-            // Print user telemetry string passed as raw pointer arg
-            let ptr = arg as *const u8;
-            unsafe {
-                // Safety-check: Read a bounded ASCII string safely from Ring 3
-                let mut len = 0;
-                while len < 100 && *ptr.add(len) != 0 {
-                    len += 1;
-                }
-                let bytes = core::slice::from_raw_parts(ptr, len);
-                if let Ok(s) = core::str::from_utf8(bytes) {
-                    println!("\x1B[38;5;46m[SYSCALL 1 (TELE)] User Telemetry: {}\x1B[0m", s);
-                }
-            }
-            1 // Status OK
-        }
-        2 => {
-            // Echo calculation syscall
-            println!("\x1B[38;5;51m[SYSCALL 2 (MATH)] User Math request. Multiplying {} * 10...\x1B[0m", arg);
-            arg * 10 // Return calculated result
-        }
-        3 => {
-            println!("\x1B[38;5;46m[SYSCALL 3 (EXIT)] User program requested exit. Returning to Kernel TTY Shell.\x1B[0m");
-            3 // return 3 to trigger the exit trampoline
-        }
-        _ => {
-            println!("\x1B[38;5;196m[SYSCALL ERR] Invalid system call ID received: {}\x1B[0m", id);
-            0
-        }
-    }
 }

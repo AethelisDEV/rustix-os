@@ -9,7 +9,10 @@ kernel-core = { path = "../kernel-core", default-features = false }
 bootloader_api = "0.11.15"
 x86_64 = "0.14.2"
 virtual-fs = { path = "../virtual-fs" }
+memory-subsystem = { path = "../memory-subsystem" }
+scheduler = { path = "../scheduler" }
 linked_list_allocator = "0.10.5"
+usermode-x86 = { path = "../usermode-x86" }
 
 [[bin]]
 name = "kernel-x86"

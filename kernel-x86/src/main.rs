@@ -18,8 +18,6 @@ pub mod framebuffer;
 pub mod keyboard;
 pub mod shell;
 pub mod gdt;
-pub mod syscall;
-pub mod usermode;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -151,6 +149,42 @@ fn thread_diagnostics() {
     }
 }
 
+fn usermode_log_callback(msg: &str) {
+    println!("{}", msg);
+}
+
+#[no_mangle]
+pub extern "C" fn rust_syscall_handler(id: u64, arg: u64) -> u64 {
+    match id {
+        1 => {
+            let ptr = arg as *const u8;
+            unsafe {
+                let mut len = 0;
+                while len < 100 && *ptr.add(len) != 0 {
+                    len += 1;
+                }
+                let bytes = core::slice::from_raw_parts(ptr, len);
+                if let Ok(s) = core::str::from_utf8(bytes) {
+                    println!("\x1B[38;5;46m[SYSCALL 1 (TELE)] User Telemetry: {}\x1B[0m", s);
+                }
+            }
+            1
+        }
+        2 => {
+            println!("\x1B[38;5;51m[SYSCALL 2 (MATH)] User Math request. Multiplying {} * 10...\x1B[0m", arg);
+            arg * 10
+        }
+        3 => {
+            println!("\x1B[38;5;46m[SYSCALL 3 (EXIT)] User program requested exit. Returning to Kernel TTY Shell.\x1B[0m");
+            3
+        }
+        _ => {
+            println!("\x1B[38;5;196m[SYSCALL ERR] Invalid system call ID received: {}\x1B[0m", id);
+            0
+        }
+    }
+}
+
 const BOOTLOADER_CONFIG: bootloader_api::config::BootloaderConfig = {
     let mut config = bootloader_api::config::BootloaderConfig::new_default();
     config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
@@ -163,7 +197,16 @@ bootloader_api::entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     // Store physical memory offset for user space paging traversal
     let phys_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
-    usermode::PHYSICAL_MEMORY_OFFSET.store(phys_offset, Ordering::Release);
+    usermode_x86::PHYSICAL_MEMORY_OFFSET.store(phys_offset, Ordering::Release);
+    usermode_x86::init_logger(usermode_log_callback);
+
+    // Initialize global locked heap memory allocator (1 MB) immediately at boot
+    let heap_ptr = HEAP_MEM.mem.get() as *mut u8;
+    let heap_size = 1024 * 1024;
+    unsafe {
+        ALLOCATOR.lock().init(heap_ptr, heap_size);
+    }
+    ALLOCATOR_READY.store(true, Ordering::Release);
 
     // 1. Initialize serial port hardware immediately
     {
@@ -179,7 +222,7 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
 
     // Draw initial aesthetic dashboard visual and render initial prompt
     if let Some(ref mut graphics) = *GRAPHICS.lock() {
-        graphics.draw_dashboard_layout(0, &[]);
+        graphics.draw_dashboard_layout(0, None);
         graphics.update_keyboard_prompt("rustanium:/> ");
     }
 
@@ -187,7 +230,8 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     enable_sse();
     unsafe {
         gdt::init_gdt();
-        syscall::init_syscalls();
+        let stack_top = gdt::TSS.privilege_stack_table[0].as_u64();
+        usermode_x86::init_syscalls(stack_top, rust_syscall_handler);
     }
     interrupts::init_idt();
     unsafe {
@@ -196,14 +240,6 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
         interrupts::PICS.enable_irq(1); // Keyboard IRQ 1
     }
     interrupts::init_pit();
-
-    // 4. Initialize global locked heap memory allocator (1 MB)
-    let heap_ptr = HEAP_MEM.mem.get() as *mut u8;
-    let heap_size = 1024 * 1024;
-    unsafe {
-        ALLOCATOR.lock().init(heap_ptr, heap_size);
-    }
-    ALLOCATOR_READY.store(true, Ordering::Release);
 
     println!(">>> [SYSTEM] UEFI bootloader initialized GOP graphics mode successfully.");
     println!(">>> [SYSTEM] SSE and FPU registers enabled (CR0/CR4 activated).");
@@ -340,7 +376,7 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
                     if *mode != ScreenMode::Dashboard {
                         *mode = ScreenMode::Dashboard;
                         if let Some(ref mut graphics) = *GRAPHICS.lock() {
-                            graphics.draw_dashboard_layout(current_ticks, &[]);
+                            graphics.draw_dashboard_layout(current_ticks, Some(&core));
                             
                             let mut prompt_buf = String::new();
                             prompt_buf.push_str("rustanium:");
@@ -375,6 +411,28 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
                         }
                     }
                 }
+                keyboard::KeyboardInput::ArrowUp => {
+                    let current_mode = *CURRENT_SCREEN_MODE.lock();
+                    if current_mode == ScreenMode::Tty {
+                        let total_len = logger::TTY_LOGS.lock().len();
+                        let mut offset = logger::TTY_SCROLL_OFFSET.lock();
+                        let max_scroll = if total_len > 22 { total_len - 22 } else { 0 };
+                        if *offset < max_scroll {
+                            *offset = core::cmp::min(max_scroll, *offset + 1);
+                            logger::TTY_LOGS_CHANGED.store(true, Ordering::Release);
+                        }
+                    }
+                }
+                keyboard::KeyboardInput::ArrowDown => {
+                    let current_mode = *CURRENT_SCREEN_MODE.lock();
+                    if current_mode == ScreenMode::Tty {
+                        let mut offset = logger::TTY_SCROLL_OFFSET.lock();
+                        if *offset > 0 {
+                            *offset = *offset - 1;
+                            logger::TTY_LOGS_CHANGED.store(true, Ordering::Release);
+                        }
+                    }
+                }
             }
         }
 
@@ -385,7 +443,7 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
                 let current_len = line_buffer.len();
                 if current_ticks != last_rendered_ticks {
                     if let Some(ref mut graphics) = *GRAPHICS.lock() {
-                        graphics.update_dashboard_telemetry(current_ticks);
+                        graphics.update_dashboard_telemetry(current_ticks, Some(&core));
                     }
                     last_rendered_ticks = current_ticks;
                 }

@@ -8,6 +8,7 @@ members = [
     "virtual-fs",
     "kernel-x86",
     "runner",
+    "usermode-x86",
 ]
 default-members = [
     "memory-subsystem",
