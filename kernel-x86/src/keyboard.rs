@@ -19,6 +19,10 @@ pub enum KeyboardInput {
     F1,
     /// F2 mode-switch key.
     F2,
+    /// F3 mode-switch key.
+    F3,
+    /// F4 save key.
+    F4,
     /// Page Up scrollback key.
     PageUp,
     /// Page Down scrollback key.
@@ -79,6 +83,10 @@ impl KeyboardState {
             0x3B => Some(KeyboardInput::F1),
             // F2 Pressed
             0x3C => Some(KeyboardInput::F2),
+            // F3 Pressed
+            0x3D => Some(KeyboardInput::F3),
+            // F4 Pressed
+            0x3E => Some(KeyboardInput::F4),
             // Page Up Pressed
             0x49 => Some(KeyboardInput::PageUp),
             // Page Down Pressed
@@ -225,12 +233,23 @@ pub fn poll_keyboard() -> Option<KeyboardInput> {
         }
 
         let mut status_port: Port<u8> = Port::new(0x64);
-        if status_port.read() & 1 != 0 {
+        let status = status_port.read();
+        // Bit 0: Output buffer full (data is ready to be read from port 0x60)
+        if (status & 1) != 0 {
             let mut data_port: Port<u8> = Port::new(0x60);
-            let scancode = data_port.read();
-            x86_64::instructions::interrupts::without_interrupts(|| {
-                crate::interrupts::KEYBOARD_STATE.handle_scancode(scancode)
-            })
+            let byte = data_port.read();
+            
+            // Bit 5: Auxiliary device output buffer full (data belongs to the mouse)
+            if (status & 0x20) != 0 {
+                // Forward the mouse byte to the mouse driver and return None (no keyboard input)
+                crate::mouse::handle_mouse_interrupt(byte);
+                None
+            } else {
+                // Standard keyboard scancode
+                x86_64::instructions::interrupts::without_interrupts(|| {
+                    crate::interrupts::KEYBOARD_STATE.handle_scancode(byte)
+                })
+            }
         } else {
             None
         }

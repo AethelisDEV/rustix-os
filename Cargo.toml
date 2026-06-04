@@ -9,6 +9,7 @@ members = [
     "kernel-x86",
     "runner",
     "usermode-x86",
+    "usermode-desktop",
 ]
 default-members = [
     "memory-subsystem",
@@ -21,6 +22,7 @@ default-members = [
 
 [profile.dev]
 panic = "abort"
+opt-level = 3
 
 [profile.release]
 panic = "abort"

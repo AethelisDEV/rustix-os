@@ -1,0 +1,13 @@
+[package]
+name = "usermode-desktop"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+# Zero runtime dependencies — pure no_std bare-metal
+
+[build-dependencies]
+# fontdue: used at BUILD TIME ONLY to rasterize Inter TTF into a static atlas array.
+# Never compiled into the final binary.
+fontdue = "0.8"

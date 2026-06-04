@@ -3,3 +3,8 @@ runner = "bootimage runner"
 rustflags = [
     "-C", "target-feature=-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-3dnow,-3dnowext,-avx,-avx2,-avx512f,+soft-float"
 ]
+
+[env]
+TEMP = { value = "target", relative = true }
+TMP = { value = "target", relative = true }
+

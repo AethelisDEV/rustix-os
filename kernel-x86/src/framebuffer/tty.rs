@@ -9,7 +9,6 @@
 
 use crate::framebuffer::core::UefiGraphics;
 use crate::framebuffer::font::*;
-use crate::framebuffer::dashboard::format_ticks;
 
 impl UefiGraphics {
     /// Renders the full-screen virtual terminal (TTY) console layout using the 8x16 font.

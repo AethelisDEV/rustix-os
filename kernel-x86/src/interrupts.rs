@@ -26,6 +26,8 @@ pub enum InterruptIndex {
     Timer = PIC_1_OFFSET,
     /// PS/2 Keyboard (IRQ 1) mapped to vector offset 33.
     Keyboard = PIC_1_OFFSET + 1,
+    /// PS/2 Mouse (IRQ 12) mapped to vector offset 44 (PIC_2_OFFSET + 4).
+    Mouse = PIC_2_OFFSET + 4,
 }
 
 impl InterruptIndex {
@@ -148,6 +150,7 @@ pub fn init_idt() {
         // Hardware Interrupt Handlers mapped to PIC offsets
         IDT[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
         IDT[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
+        IDT[InterruptIndex::Mouse.as_usize()].set_handler_fn(mouse_interrupt_handler);
 
         IDT.load();
     }
@@ -204,10 +207,69 @@ extern "x86-interrupt" fn divide_by_zero_handler(stack_frame: InterruptStackFram
 pub static TIMER_TICKS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    TIMER_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let ticks = TIMER_TICKS.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+    crate::SYSTEM_TICKS.store(ticks, core::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        let page_ptr = core::ptr::addr_of_mut!(crate::syscall::SHARED_INFO_PAGE);
+        let ticks_ptr = core::ptr::addr_of_mut!((*page_ptr).info.system_ticks);
+        ticks_ptr.write(ticks as u64);
+    }
     unsafe {
         PICS.notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
     }
+}
+
+/// Ring Buffer implementation for Thread-Safe/Interrupt-Safe Event handling.
+#[derive(Debug)]
+pub struct RingBuffer<T, const N: usize> {
+    data: [Option<T>; N],
+    head: usize,
+    tail: usize,
+}
+
+impl<T, const N: usize> RingBuffer<T, N> {
+    pub const fn new() -> Self {
+        Self {
+            data: [const { None }; N],
+            head: 0,
+            tail: 0,
+        }
+    }
+
+    pub fn push(&mut self, item: T) -> bool {
+        let next = (self.head + 1) % N;
+        if next == self.tail {
+            return false; // Full
+        }
+        self.data[self.head] = Some(item);
+        self.head = next;
+        true
+    }
+
+    pub fn pop(&mut self, item_out: &mut T) -> bool {
+        if self.head == self.tail {
+            return false; // Empty
+        }
+        if let Some(item) = self.data[self.tail].take() {
+            *item_out = item;
+            self.tail = (self.tail + 1) % N;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+pub static INPUT_QUEUE: crate::Spinlock<RingBuffer<usermode_x86::syscall::InputEvent, 256>> = crate::Spinlock::new(RingBuffer::new());
+
+pub fn push_input_event(event: usermode_x86::syscall::InputEvent) {
+    INPUT_QUEUE.lock().push(event);
+}
+
+pub fn pop_input_event(event_out: &mut usermode_x86::syscall::InputEvent) -> bool {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        INPUT_QUEUE.lock().pop(event_out)
+    })
 }
 
 /// Static buffer holding keyboard inputs received asynchronously.
@@ -220,9 +282,42 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         let mut data_port: Port<u8> = Port::new(0x60);
         let scancode = data_port.read();
         if let Some(input) = KEYBOARD_STATE.handle_scancode(scancode) {
+            let mut key_val = 0;
+            match input {
+                crate::keyboard::KeyboardInput::Char(c) => key_val = c as u32,
+                crate::keyboard::KeyboardInput::Backspace => key_val = 0x1000,
+                crate::keyboard::KeyboardInput::Enter => key_val = 0x1001,
+                crate::keyboard::KeyboardInput::F1 => key_val = 0x1002,
+                crate::keyboard::KeyboardInput::F2 => key_val = 0x1003,
+                crate::keyboard::KeyboardInput::F3 => key_val = 0x1004,
+                crate::keyboard::KeyboardInput::F4 => key_val = 0x1005,
+                crate::keyboard::KeyboardInput::PageUp => key_val = 0x1006,
+                crate::keyboard::KeyboardInput::PageDown => key_val = 0x1007,
+                crate::keyboard::KeyboardInput::ArrowUp => key_val = 0x1008,
+                crate::keyboard::KeyboardInput::ArrowDown => key_val = 0x1009,
+            }
+            let event = usermode_x86::syscall::InputEvent {
+                event_type: 1, // Keyboard
+                keyboard_key: key_val,
+                mouse_x: 0,
+                mouse_y: 0,
+                mouse_left_clicked: 0,
+                mouse_right_clicked: 0,
+            };
+            push_input_event(event);
+
             KEYBOARD_BUFFER = Some(input);
         }
         PICS.notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+    }
+}
+
+extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    unsafe {
+        let mut data_port: Port<u8> = Port::new(0x60);
+        let packet = data_port.read();
+        crate::mouse::handle_mouse_interrupt(packet);
+        PICS.notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
     }
 }
 

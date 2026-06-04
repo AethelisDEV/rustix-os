@@ -26,6 +26,37 @@ pub static mut KERNEL_STACK_TOP: u64 = 0;
 #[no_mangle]
 pub static mut SYSCALL_HANDLER: usize = 0;
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ScreenInfo {
+    pub framebuffer_addr: u64,
+    pub width: u64,
+    pub height: u64,
+    pub stride: u64,
+    pub bytes_per_pixel: u64,
+    pub format: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct InputEvent {
+    pub event_type: u32,       // 0 = None, 1 = Keyboard, 2 = Mouse
+    pub keyboard_key: u32,     // Decoded character or special key code
+    pub mouse_x: i32,
+    pub mouse_y: i32,
+    pub mouse_left_clicked: u32,
+    pub mouse_right_clicked: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SharedSystemInfo {
+    pub system_ticks: u64,
+    pub heap_free: u64,
+    pub heap_used: u64,
+    pub cpu_usage: u64,
+}
+
 /// Initializes MSR registers to enable and route system calls on x86-64 hardware.
 ///
 /// Sets up:
@@ -37,7 +68,7 @@ pub static mut SYSCALL_HANDLER: usize = 0;
 /// # Safety
 /// This function is unsafe because it writes directly to Model-Specific Registers,
 /// which can trigger CPU exceptions if descriptors or handlers are invalid.
-pub unsafe fn init_syscalls(kernel_stack_top: u64, handler: extern "C" fn(u64, u64) -> u64) {
+pub unsafe fn init_syscalls(kernel_stack_top: u64, handler: extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64) {
     // 1. Populate the secure kernel stack top and the dynamic syscall handler callback
     KERNEL_STACK_TOP = kernel_stack_top;
     SYSCALL_HANDLER = handler as usize;
@@ -83,14 +114,20 @@ core::arch::global_asm!(
     "push r10",
     // Re-route Syscall parameters to conform to Rust ABI:
     // User syscall ID is in RAX -> becomes 1st argument (RDI in Rust)
-    // User argument is in RDI -> becomes 2nd argument (RSI in Rust)
+    // User arguments (RDI, RSI, RDX, R10, R8) -> become 2nd to 6th arguments (RSI, RDX, RCX, R8, R9)
+    "mov r9, r8",
+    "mov r8, r10",
+    "mov rcx, rdx",
+    "mov rdx, rsi",
     "mov rsi, rdi",
     "mov rdi, rax",
     // Call our registered dynamic Rust handler function pointer safely
+    "push rax", // Save the syscall ID on the stack
     "mov rax, [rip + SYSCALL_HANDLER]",
     "call rax",
     // Now RAX contains the return value of our syscall handler
-    "cmp rax, 3",
+    "pop rdi", // Retrieve the syscall ID into RDI
+    "cmp rdi, 3", // Check if the SYSCALL ID was 3
     "je syscall_exit_handler",
     // Restore saved registers
     "pop r10",

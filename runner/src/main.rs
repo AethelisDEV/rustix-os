@@ -14,17 +14,84 @@ fn main() -> Result<()> {
     // 2. Resolve workspace directories
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")
         .context("Failed to get CARGO_MANIFEST_DIR environment variable")?);
-    let workspace_root = manifest_dir.parent()
-        .ok_or_else(|| anyhow!("Failed to resolve workspace root directory"))?;
+    let mut workspace_root = manifest_dir.parent()
+        .ok_or_else(|| anyhow!("Failed to resolve workspace root directory"))?
+        .to_path_buf();
+
+    // Handle potential AE Rustanium -> Rustix OS directory rename/mismatch
+    if !workspace_root.exists() {
+        let root_str = workspace_root.to_string_lossy().replace("AE Rustanium", "Rustix OS");
+        let alt_root = PathBuf::from(&root_str);
+        if alt_root.exists() {
+            workspace_root = alt_root;
+        }
+    }
     let target_dir = workspace_root.join("target");
+
+    // Redirect temp directories to workspace drive to prevent disk space issues on C:
+    let custom_temp_dir = target_dir.join("tmp");
+    std::fs::create_dir_all(&custom_temp_dir)
+        .context("Failed to create custom temp directory")?;
+    std::env::set_var("TEMP", &custom_temp_dir);
+    std::env::set_var("TMP", &custom_temp_dir);
 
     println!("📂 Workspace Root : {}", workspace_root.display());
     println!("🛠️ Target Profile  : {}", profile);
+    println!("🧹 Redirected TEMP/TMP to: {}", custom_temp_dir.display());
 
-    // 3. Compile the bare-metal kernel package for x86_64-unknown-none
+    // 3. Compile the usermode-desktop package for x86_64-unknown-none
+    // Use 'cargo rustc' to pass additional compiler flags for static linking
+    // and custom linker script placement at VA 0x400000.
+    println!("\n📦 Step 0: Compiling usermode-desktop target...");
+    let mut build_desktop = Command::new("cargo");
+    build_desktop.current_dir(&workspace_root);
+    build_desktop.args([
+        "+nightly",
+        "rustc",
+        "--package", "usermode-desktop",
+        "--target", "x86_64-unknown-none",
+    ]);
+    if is_release {
+        build_desktop.arg("--release");
+    }
+    // Pass linker script and static relocation model via rustc flags
+    build_desktop.args([
+        "--", "-C", "relocation-model=static", "-C", "link-arg=-Tlinker.ld",
+    ]);
+
+    let desktop_status = build_desktop.status()
+        .context("Failed to execute cargo build for usermode-desktop")?;
+    if !desktop_status.success() {
+        return Err(anyhow!("usermode-desktop compilation failed"));
+    }
+
+    // Convert compiled ELF to flat binary via llvm-objcopy
+    println!("💾 Step 0.5: Converting usermode-desktop ELF to flat binary...");
+    let desktop_elf = target_dir
+        .join("x86_64-unknown-none")
+        .join(profile)
+        .join("usermode-desktop");
+    let desktop_bin = target_dir.join("usermode-desktop.bin");
+
+    let objcopy_path = "C:\\Users\\Can\\.rustup\\toolchains\\nightly-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\bin\\llvm-objcopy.exe";
+    let mut objcopy = Command::new(objcopy_path);
+    objcopy.args([
+        "-O", "binary",
+        &desktop_elf.to_string_lossy(),
+        &desktop_bin.to_string_lossy(),
+    ]);
+
+    let objcopy_status = objcopy.status()
+        .context("Failed to run llvm-objcopy. Make sure Rust nightly MSVC is installed.")?;
+    if !objcopy_status.success() {
+        return Err(anyhow!("llvm-objcopy failed to generate flat binary"));
+    }
+    println!("✅ Flat binary generated at: {}", desktop_bin.display());
+
+    // 4. Compile the bare-metal kernel package for x86_64-unknown-none
     println!("\n📦 Step 1: Compiling kernel-x86 target...");
     let mut build_cmd = Command::new("cargo");
-    build_cmd.current_dir(workspace_root);
+    build_cmd.current_dir(&workspace_root);
     build_cmd.args([
         "+nightly",
         "build",
@@ -84,6 +151,7 @@ fn main() -> Result<()> {
     qemu.args([
         "-drive", &format!("format=raw,file={}", bios_image_path.display()),
         "-serial", "stdio", // Direct COM1 print to console!
+        "-m", "1G",
     ]);
 
     let mut qemu_child = qemu.spawn()
