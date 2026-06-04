@@ -4,6 +4,10 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Safety](https://img.shields.io/badge/safety-Safe%20Core%20%2F%20Bare--metal%20Unsafe-success.svg)](#safety--architecture-principles)
 
+<p align="center">
+  <img src="assets/rustixos.png" alt="Rustix OS Desktop Environment" width="800">
+</p>
+
 **Rustix OS** (originally developed as *AE Rustanium*) is a custom, microkernel-inspired bare-metal operating system for the **x86-64 architecture**, specifically designed to survive **hardware bit-flips, silent data corruption, and cosmic radiation** without system failure, while booting directly into a custom, premium **macOS-inspired graphical user interface**.
 
 Instead of relying solely on hardware-level ECC RAM, Rustix OS implements an active, software-defined fault-tolerance layer in its microkernel (`kernel-x86`) coupled with a secure user-space runtime (`usermode-x86`) that executes a premium, mathematically-rendered Desktop Environment (`usermode-desktop`).
