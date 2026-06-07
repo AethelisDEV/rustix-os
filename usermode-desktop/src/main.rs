@@ -677,12 +677,23 @@ extern "C" fn main_rust() -> ! {
             draw_wallpaper();
 
             // Desktop sidebar icons — 48px size, more vertical spacing
-            draw_icon(0, 20, 30);
-            draw_text_atlas(4, 84, "Files", 210, 222, 240, AtlasSize::Small, AtlasWeight::Regular);
-            draw_icon(1, 20, 130);
-            draw_text_atlas(4, 184, "Terminal", 210, 222, 240, AtlasSize::Small, AtlasWeight::Regular);
-            draw_icon(2, 20, 230);
-            draw_text_atlas(4, 284, "Monitor", 210, 222, 240, AtlasSize::Small, AtlasWeight::Regular);
+            let icon_x = 20;
+            let icon_center = icon_x + 22; // 20 + 22 = 42
+
+            // Icon 0: Files
+            draw_icon(0, icon_x, 30);
+            let w0 = measure_text("Files", AtlasSize::Small, AtlasWeight::Regular);
+            draw_text_atlas(icon_center - w0 / 2, 84, "Files", 210, 222, 240, AtlasSize::Small, AtlasWeight::Regular);
+
+            // Icon 1: Terminal
+            draw_icon(1, icon_x, 130);
+            let w1 = measure_text("Terminal", AtlasSize::Small, AtlasWeight::Regular);
+            draw_text_atlas(icon_center - w1 / 2, 184, "Terminal", 210, 222, 240, AtlasSize::Small, AtlasWeight::Regular);
+
+            // Icon 2: Monitor
+            draw_icon(2, icon_x, 230);
+            let w2 = measure_text("Monitor", AtlasSize::Small, AtlasWeight::Regular);
+            draw_text_atlas(icon_center - w2 / 2, 284, "Monitor", 210, 222, 240, AtlasSize::Small, AtlasWeight::Regular);
 
             unsafe {
                 let sw = SCREEN_WIDTH;
