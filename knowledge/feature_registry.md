@@ -103,6 +103,12 @@ This registry tracks all newly implemented features, system-level enhancements, 
 * **Rationale**: Adheres to strict Single Responsibility Principles (SRP) and the file length limit of 800 lines specified in `AI_GUIDELINES.md`. This slims down the entry point, isolating low-level CPU bootstrapping from CLI logic and input decoding, dramatically improving system maintainability.
 * **Location**: `kernel-x86/src/main.rs`, `kernel-x86/src/logger.rs`, `kernel-x86/src/keyboard.rs`, and `kernel-x86/src/shell.rs`
 
+### 12. HAL Assembly Separation & Unsafe Isolation (Zero Unsafe Compliance)
+* **Date**: June 07, 2026
+* **Description**: Extracted the raw inline assembly port I/O code from `hal.rs` into a separate GNU/LLVM assembly source file `hal.s`. Declared `extern "C" { fn hal_write_byte(b: u8); }` to invoke the helper, and strictly encapsulated the unsafe block within the safe public sarmalayıcı (wrapper) function `SerialPort::write_byte`. Additionally, added `#![deny(unsafe_code)]` at the top of `bootstrap.rs` to enforce unsafe code exclusion in bootstrap path.
+* **Rationale**: Fully complies with the strict Zero Unsafe Policy for core workspace modules in `AI_GUIDELINES.md`, isolating necessary assembly/unsafe CPU boundaries from safe microkernel logic and guaranteeing the safety of bootstrap modules.
+* **Location**: `kernel-core/src/hal.s` (New), `kernel-core/src/hal.rs`, and `kernel-core/src/bootstrap.rs`
+
 ---
 
 ## 📊 Visual Telemetry & Interface Enhancements

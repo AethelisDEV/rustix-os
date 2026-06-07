@@ -8,13 +8,22 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+#[cfg(not(feature = "std"))]
+core::arch::global_asm!(include_str!("hal.s"));
+
+#[cfg(not(feature = "std"))]
+extern "C" {
+    /// Assembly helper defined in hal.s to write a byte to COM1 serial port (0x3F8).
+    fn hal_write_byte(b: u8);
+}
+
 /// Simulates a real hardware serial port controller (UART 16550) mapped to Port `0x3F8` (COM1).
 pub struct SerialPort;
 
 impl SerialPort {
     /// Writes a character byte to the serial port.
     ///
-    /// - **Real x86_64**: Writes to I/O Port `0x3F8` using assembly `outdx`.
+    /// - **Real x86_64**: Writes to I/O Port `0x3F8` using external assembly `hal_write_byte`.
     /// - **Simulation Target**: Appends log output dynamically to the file `serial_out.log`.
     pub fn write_byte(b: u8) {
         #[cfg(feature = "std")]
@@ -32,12 +41,7 @@ impl SerialPort {
         #[cfg(not(feature = "std"))]
         {
             unsafe {
-                core::arch::asm!(
-                    "out dx, al",
-                    in("dx") 0x3F8u16,
-                    in("al") b,
-                    options(nomem, nostack, preserves_flags)
-                );
+                hal_write_byte(b);
             }
         }
     }

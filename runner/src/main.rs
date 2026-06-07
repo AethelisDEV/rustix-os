@@ -73,8 +73,56 @@ fn main() -> Result<()> {
         .join("usermode-desktop");
     let desktop_bin = target_dir.join("usermode-desktop.bin");
 
-    let objcopy_path = "C:\\Users\\Can\\.rustup\\toolchains\\nightly-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\bin\\llvm-objcopy.exe";
-    let mut objcopy = Command::new(objcopy_path);
+    // Find llvm-objcopy dynamically
+    let objcopy_path = {
+        let mut path = None;
+        if let (Ok(rustup_home), Ok(toolchain)) = (std::env::var("RUSTUP_HOME"), std::env::var("RUSTUP_TOOLCHAIN")) {
+            let triple = if toolchain.contains("x86_64-pc-windows-msvc") {
+                Some("x86_64-pc-windows-msvc")
+            } else if toolchain.contains("x86_64-pc-windows-gnu") {
+                Some("x86_64-pc-windows-gnu")
+            } else {
+                None
+            };
+            if let Some(t) = triple {
+                let p = PathBuf::from(&rustup_home)
+                    .join("toolchains")
+                    .join(&toolchain)
+                    .join("lib")
+                    .join("rustlib")
+                    .join(t)
+                    .join("bin")
+                    .join("llvm-objcopy.exe");
+                if p.exists() {
+                    path = Some(p);
+                }
+            }
+        }
+        if path.is_none() {
+            if let Ok(user_profile) = std::env::var("USERPROFILE") {
+                for toolchain in &["nightly-x86_64-pc-windows-msvc", "nightly-x86_64-pc-windows-gnu"] {
+                    let triple = if toolchain.contains("msvc") { "x86_64-pc-windows-msvc" } else { "x86_64-pc-windows-gnu" };
+                    let p = PathBuf::from(&user_profile)
+                        .join(".rustup")
+                        .join("toolchains")
+                        .join(toolchain)
+                        .join("lib")
+                        .join("rustlib")
+                        .join(triple)
+                        .join("bin")
+                        .join("llvm-objcopy.exe");
+                    if p.exists() {
+                        path = Some(p);
+                        break;
+                    }
+                }
+            }
+        }
+        path.unwrap_or_else(|| PathBuf::from("llvm-objcopy.exe"))
+    };
+
+    println!("🔧 Using llvm-objcopy at: {}", objcopy_path.display());
+    let mut objcopy = Command::new(&objcopy_path);
     objcopy.args([
         "-O", "binary",
         &desktop_elf.to_string_lossy(),

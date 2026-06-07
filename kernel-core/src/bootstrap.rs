@@ -10,6 +10,8 @@
 //! - **Redundancy Metrics**: Tracks every single-bit ECC repair, quarantined page frame, relocation event, and TMR voting correction.
 //! - **Kernel Tick Loop**: Advances the system clock, coordinates scheduler ticks, and sweeps the memory space periodically.
 
+#![deny(unsafe_code)]
+
 use alloc::vec::Vec;
 use alloc::format;
 use memory_subsystem::{MemoryAllocator, MemoryScrubber, ScrubReport};
