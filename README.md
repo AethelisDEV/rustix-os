@@ -63,7 +63,8 @@ To keep spaceborne or high-altitude flight computers functional without crash-in
 We have automated the building and booting process. No manual image partitioning or external bootimage tools are required.
 
 *   Ensure you have [QEMU](https://www.qemu.org/) installed and added to your system path.
-*   Execute the host orchestrator runner:
+*   Ensure you have the Visual Studio C++ Build Tools installed (needed for host toolchain compilation).
+*   Execute the host orchestrator runner (the correct nightly MSVC toolchain and components will be selected automatically via [rust-toolchain.toml](file:///a:/AE%20Projects/Rustix%20OS/rust-toolchain.toml)):
     ```bash
     cargo run --package runner -- --release
     ```
