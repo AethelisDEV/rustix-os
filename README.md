@@ -1,7 +1,7 @@
 # 🚀 Rustix OS: Safe, Fault-Tolerant & Self-Healing Operating System with a Premium GUI
 
 [![Rust](https://img.shields.io/badge/rust-stable%20%2F%20nightly-orange.svg)](https://www.rust-lang.org)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL2.0-blue.svg)](LICENSE)
 [![Safety](https://img.shields.io/badge/safety-Safe%20Core%20%2F%20Bare--metal%20Unsafe-success.svg)](#safety--architecture-principles)
 
 <p align="center">
