@@ -136,6 +136,27 @@ impl SystemCore {
 
         crate::hal::SerialPort::write_str("[BOOT] Microkernel initialization complete. Yielding to scheduler.\n\n");
 
+        crate::hal::SerialPort::write_str("[BOOT] Scanning PCI/PCIe bus for connected hardware...\n");
+        let pci_devices = crate::hal::PciBus::scan_devices();
+        for dev in &pci_devices {
+            let log_msg = format!(
+                "  [PCI] Bus {:02X}:Slot {:02X}:Func {} | Vendor {:04X}:Device {:04X} | Class {:02X}.{:02X} | BAR0: {:#010X}\n",
+                dev.bus, dev.slot, dev.func, dev.vendor_id, dev.device_id, dev.class_code, dev.subclass, dev.bar0
+            );
+            crate::hal::SerialPort::write_str(&log_msg);
+            if dev.vendor_id == 0x10DE {
+                let alert_msg = format!(
+                    "  \x1B[38;5;46m[PCI FOUND Nvidia GPU] Detected RTX/GTX Device ID: {:04X} | BAR0 range active!\x1B[0m\n",
+                    dev.device_id
+                );
+                crate::hal::SerialPort::write_str(&alert_msg);
+            }
+        }
+        if pci_devices.is_empty() {
+            crate::hal::SerialPort::write_str("  [PCI] No devices detected.\n");
+        }
+        crate::hal::SerialPort::write_str("\n");
+
         Self {
             allocator,
             dispatcher,
